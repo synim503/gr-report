@@ -107,7 +107,7 @@ public class ReportService {
         Template.Chart c = e.chart;
         double scale = Math.max(1, Math.min(s.imageScale, 4));
         int w = (int) Math.max(50, Math.min(4000, Math.round(e.w * 96 / 72 * scale)));
-        int h = (int) Math.max(50, Math.min(4000, Math.round(e.h * 96 / 72 * scale)));
+        int h = (int) Math.max(50, Math.min(4000, Math.round(Captions.pictureBox(e).h * 96 / 72 * scale)));   // the caption line is not part of the picture
         String from = c.from != null && !c.from.isBlank() ? c.from : t.timeRange.from;
         String to = c.to != null && !c.to.isBlank() ? c.to : t.timeRange.to;
         try {

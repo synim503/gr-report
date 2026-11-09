@@ -30,6 +30,8 @@ public class Block {
         @Size(max = 500) public String defaultValue = "";
         /** Known values (from the Grafana dashboard) offered as suggestions in the UI. */
         @Size(max = 200) public List<@Size(max = 500) String> options = new ArrayList<>();
+        /** True for query variables whose values are loaded on demand from Grafana. */
+        public boolean dynamic;
     }
 
     /** Chart position relative to the block's top-left corner (points). */

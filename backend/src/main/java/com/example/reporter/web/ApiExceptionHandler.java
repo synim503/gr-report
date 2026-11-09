@@ -14,6 +14,7 @@ public class ApiExceptionHandler {
     ResponseEntity<Map<String, Object>> grafana(GrafanaException e) {
         // Grafana auth problems are surfaced as 502 so the UI does not confuse them with its own auth.
         HttpStatus s = e.status() == 404 ? HttpStatus.NOT_FOUND
+                : e.status() == 422 ? HttpStatus.UNPROCESSABLE_ENTITY
                 : e.getMessage() != null && e.getMessage().contains("not configured") ? HttpStatus.PRECONDITION_FAILED
                 : HttpStatus.BAD_GATEWAY;
         return ResponseEntity.status(s).body(Map.of("error", "grafana", "message", e.getMessage(), "grafanaStatus", e.status()));

@@ -7,6 +7,8 @@ import { Selection } from './PageView'
 import { Icon, IconName } from './Icon'
 import { VarField } from './VarField'
 import { useDashboard } from '../lib/useDashboard'
+import { api } from '../api'
+import { captionLine, figureNumbers } from '../lib/captions'
 
 interface Props {
   tpl: Tpl
@@ -86,11 +88,49 @@ export function Inspector({ tpl, sel, dispatch, snap, setSnap, onSaveBlock }: Pr
         </>
       )}
 
+      {one && (one.type === 'chart' || one.type === 'image') && <CaptionProps el={one} page={sel.page} dispatch={dispatch} tpl={tpl} />}
+      {els.filter(e => e.type === 'chart' || e.type === 'image').length > 0 && (els.length > 1 || inGroup) && (
+        <>
+          <h3>Подписи</h3>
+          <div className="btnrow">
+            <button data-testid="cap-all" onClick={() => dispatch({ t: 'captions', page: sel.page, items: Object.fromEntries(els.filter(e => e.type === 'chart' || e.type === 'image')
+              .map(e => [e.id, e.caption ?? { text: e.chart?.title ?? '', position: 'below' as const }])) })}><Icon name="type" /> Подписать все</button>
+            <button data-testid="cap-none" onClick={() => dispatch({ t: 'captions', page: sel.page, items: Object.fromEntries(els.filter(e => e.type === 'chart' || e.type === 'image').map(e => [e.id, null])) })}>Убрать подписи</button>
+          </div>
+          <div className="muted" style={{ fontSize: 11 }}>Текст по умолчанию — название панели; номера присваиваются автоматически по порядку чтения.</div>
+        </>
+      )}
       {inGroup && <GroupVars key={els[0].group!.id} els={members} page={sel.page} dispatch={dispatch} onSaveBlock={onSaveBlock} />}
       {!inGroup && charts.length > 0 && <div className="btnrow"><button data-testid="save-block" onClick={onSaveBlock}><Icon name="layers" /> Сохранить графики как блок…</button></div>}
       {one?.type === 'chart' && one.chart && !inGroup && <ChartProps el={one} page={sel.page} dispatch={dispatch} tpl={tpl} />}
       {one?.type === 'chart' && one.chart && inGroup && <ChartProps el={one} page={sel.page} dispatch={dispatch} tpl={tpl} compact />}
     </div>
+  )
+}
+
+function CaptionProps({ el, page, dispatch, tpl }: { el: El; page: number; dispatch: (a: Action) => void; tpl: Tpl }) {
+  const c = el.caption
+  const n = figureNumbers(tpl)[el.id]
+  const label = tpl.captionLabel?.trim() || 'Рисунок'
+  return (
+    <>
+      <h3>Подпись</h3>
+      <label className="row" style={{ cursor: 'pointer' }}>
+        <input data-testid="cap-enable" type="checkbox" checked={!!c} style={{ width: 15 }}
+          onChange={e => dispatch({ t: 'captions', page, items: { [el.id]: e.target.checked ? { text: el.chart?.title ?? '', position: 'below' } : null } })} />
+        <span style={{ width: 'auto', color: 'inherit' }}>Подпись с автонумерацией</span>
+      </label>
+      {c && (
+        <>
+          <div className="muted" data-testid="cap-preview" style={{ fontSize: 12 }}>{captionLine(label, n ?? 0, c.text)}</div>
+          <div className="row"><input className="grow" data-testid="cap-text" placeholder="Текст подписи (необязательно)" value={c.text}
+            onFocus={() => dispatch({ t: 'checkpoint' })} onChange={e => dispatch({ t: 'patch', page, ids: [el.id], patch: { caption: { ...c, text: e.target.value } } })} /></div>
+          <div className="row"><label>Позиция</label>
+            <select data-testid="cap-pos" value={c.position} onChange={e => { dispatch({ t: 'checkpoint' }); dispatch({ t: 'patch', page, ids: [el.id], patch: { caption: { ...c, position: e.target.value as 'above' | 'below' } } }) }}>
+              <option value="below">Под элементом</option><option value="above">Над элементом</option></select></div>
+        </>
+      )}
+    </>
   )
 }
 
@@ -109,7 +149,10 @@ function GroupVars({ els, page, dispatch, onSaveBlock }: { els: El[]; page: numb
       <div className="muted" style={{ fontSize: 11 }}>Уходят в Grafana как var-имя для всех {els.length} графиков. <code>{'{{имя}}'}</code> — из переменных отчёта.</div>
       {names.map(k => {
         const dv = known.find(v => v.name === k)
+        const uid = els.find(e => e.chart)?.chart?.dashboardUid
+        const cur = { ...Object.fromEntries(known.map(x => [x.name, x.defaultValue])), ...vars }
         return <VarField key={k} name={k} label={dv?.label} testid={`gv-${k}`} options={dv?.options} value={vars[k] ?? dv?.defaultValue ?? ''}
+          load={dv?.dynamic && uid ? () => api.varOptions(uid, k, cur) : undefined}
           onFocus={() => dispatch({ t: 'checkpoint' })} onChange={v => set(k, v)} />
       })}
       <div className="row"><input className="grow" data-testid="gv-new-name" placeholder="новая переменная" value={newName} onChange={e => setNewName(e.target.value)} />
@@ -145,6 +188,7 @@ function ChartProps({ el, page, dispatch, tpl, compact }: { el: El; page: number
             return (
               <div key={name} className="kv1">
                 <VarField name={name} label={dv?.label} testid={`cv-${name}`} options={dv?.options} value={c.vars?.[name] ?? dv?.defaultValue ?? ''}
+                  load={dv?.dynamic ? () => api.varOptions(c.dashboardUid, name, { ...Object.fromEntries(known.map(x => [x.name, x.defaultValue])), ...c.vars }) : undefined}
                   onFocus={() => dispatch({ t: 'checkpoint' })} onChange={v => upd({ vars: { ...c.vars, [name]: v } })} />
               </div>
             )
@@ -169,6 +213,10 @@ function PageSettings({ tpl, dispatch, snap, setSnap }: { tpl: Tpl; dispatch: (a
         <select data-testid="page-size" value={current} onChange={e => setSize(e.target.value, landscape)}>{Object.keys(PAGE_SIZES).map(n => <option key={n}>{n}</option>)}</select>
         <select data-testid="page-orient" value={landscape ? 'l' : 'p'} onChange={e => setSize(current, e.target.value === 'l')}><option value="p">Книжная</option><option value="l">Альбомная</option></select></div>
       <div className="row"><label>Привязка</label><label style={{ width: 'auto' }}><input data-testid="snap-toggle" type="checkbox" checked={snap} onChange={e => setSnap(e.target.checked)} /> к краям, центру, полям и соседним блокам (Alt — временно выкл.)</label></div>
+
+      <h3>Подписи рисунков</h3>
+      <div className="row"><label>Префикс</label><input className="grow" data-testid="cap-label" value={tpl.captionLabel ?? 'Рисунок'} maxLength={40} onChange={e => dispatch({ t: 'meta', patch: { captionLabel: e.target.value } })} /></div>
+      <div className="muted" style={{ fontSize: 11 }}>«Рисунок 1 — …»: нумерация автоматическая по порядку чтения, в Word это настоящее поле SEQ.</div>
 
       <h3>Период по умолчанию</h3>
       <div className="row"><label>С</label><input className="grow" data-testid="range-from" value={tpl.timeRange.from} onChange={e => dispatch({ t: 'meta', patch: { timeRange: { ...tpl.timeRange, from: e.target.value } } })} /></div>

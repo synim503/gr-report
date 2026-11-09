@@ -31,6 +31,7 @@ public final class BlockFactory {
             Block.Variable bv = new Block.Variable();
             bv.name = v.name(); bv.label = v.label(); bv.defaultValue = v.defaultValue() == null ? "" : v.defaultValue();
             bv.options = new java.util.ArrayList<>(v.options());
+            bv.dynamic = v.dynamic();
             b.variables.add(bv);
         }
         return b;

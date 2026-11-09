@@ -200,6 +200,61 @@ class DocxBuilderTest {
         assertEquals("Test", build(template(text("<p>x</p>", 0, 0, 10, 10))).getProperties().getCoreProperties().getTitle());
     }
 
+    // ---------- captions ----------
+    static Element captioned(Element e, String text, String pos) { e.caption = new Template.Caption(); e.caption.text = text; e.caption.position = pos; return e; }
+    static Map<Element, DocxBuilder.Image> pics(Element... els) {
+        Map<Element, DocxBuilder.Image> m = new IdentityHashMap<>();
+        for (Element e : els) m.put(e, new DocxBuilder.Image(FakeGrafana.png(40, 20, "x"), Document.PICTURE_TYPE_PNG));
+        return m;
+    }
+    static String plain(XWPFDocument d) { return d.getDocument().xmlText().replaceAll("<w:instrText[^>]*>[^<]*</w:instrText>", "").replaceAll("<[^>]+>", ""); }
+
+    @Test void captionIsARealSeqFieldWithCachedNumberAndCustomText() throws Exception {
+        Element c = captioned(chart("abc", 1, 50, 100, 300, 200), "Загрузка CPU", "below");
+        var d = build(template(c), pics(c));
+        String xml = d.getDocument().xmlText();
+        assertTrue(xml.contains("SEQ Рисунок \\* ARABIC"), "numbering must be a Word SEQ field");
+        assertTrue(xml.contains("w:fldCharType=\"begin\"") && xml.contains("w:fldCharType=\"separate\"") && xml.contains("w:fldCharType=\"end\""));
+        assertTrue(plain(d).contains("Рисунок 1 \u2014 Загрузка CPU"), plain(d));
+        var fr = framed(d).get(framed(d).size() - 1).getCTP().getPPr();
+        assertEquals(300 * 20, n(fr.getFramePr().getW())); assertEquals(22 * 20, n(fr.getFramePr().getH()));
+        assertEquals(50 * 20, n(fr.getFramePr().getX())); assertEquals((100 + 200 - 22) * 20, n(fr.getFramePr().getY()), "caption sits at the bottom of the element box");
+        assertEquals(ParagraphAlignment.CENTER, framed(d).get(framed(d).size() - 1).getAlignment());
+    }
+
+    @Test void picturesShrinkByTheCaptionHeightAndAboveCaptionsMovePictureDown() throws Exception {
+        Element below = captioned(chart("abc", 1, 50, 100, 300, 200), "b", "below"), above = captioned(chart("abc", 2, 400, 100, 150, 200), "a", "above"), none = chart("abc", 3, 50, 400, 300, 100);
+        String xml = build(template(below, above, none), pics(below, above, none)).getDocument().xmlText();
+        assertTrue(xml.contains("cy=\"" + 178 * 12700 + "\""), "pictures with captions are 22pt shorter");
+        assertTrue(xml.contains("cy=\"" + 100 * 12700 + "\""), "pictures without a caption keep their size");
+        var ys = java.util.regex.Pattern.compile("relativeFrom=\"page\"><wp:posOffset>(\\d+)</wp:posOffset></wp:positionV>").matcher(xml);
+        java.util.List<Long> v = new java.util.ArrayList<>(); while (ys.find()) v.add(Long.parseLong(ys.group(1)));
+        assertTrue(v.contains(100L * 12700), "below: picture stays at the top"); assertTrue(v.contains(122L * 12700), "above: picture moves down by the caption height");
+    }
+
+    @Test void numbersFollowReadingOrderNotInsertionOrderAndLabelIsConfigurable() throws Exception {
+        Element second = captioned(chart("abc", 2, 300, 100, 200, 100), "right", "below"), first = captioned(chart("abc", 1, 20, 100, 200, 100), "left", "below");
+        Template t = template(second, first); t.captionLabel = "Рис.";
+        var d = build(t, pics(first, second));
+        String text = plain(d);
+        assertTrue(text.indexOf("Рис. 1 \u2014 left") >= 0 && text.indexOf("Рис. 2 \u2014 right") > text.indexOf("Рис. 1 \u2014 left"), text);
+        assertTrue(d.getDocument().xmlText().contains("SEQ Рис \\* ARABIC"));
+    }
+
+    @Test void emptyCaptionTextGivesJustTheNumberAndVariablesAreSubstituted() throws Exception {
+        Element a = captioned(chart("abc", 1, 20, 100, 200, 100), "", "below"), b = captioned(chart("abc", 2, 20, 300, 200, 100), "Период {{from}} - {{to}} & ok", "below");
+        String text = plain(build(template(a, b), pics(a, b)));
+        assertTrue(text.contains("Рисунок 1") && !text.contains("Рисунок 1 \u2014"), text);
+        assertTrue(text.contains("Рисунок 2 \u2014 Период now-6h - now &amp; ok"), text);   // XML-escaped in the file
+    }
+
+    @Test void captionsOnTwoPagesContinueNumbering() throws Exception {
+        Element a = captioned(chart("abc", 1, 20, 100, 200, 100), "one", "below"); Template t = template(a);
+        Template.Page p2 = new Template.Page(); Element b = captioned(chart("abc", 2, 20, 100, 200, 100), "two", "below"); p2.elements.add(b); t.pages.add(p2);
+        String text = plain(build(t, pics(a, b)));
+        assertTrue(text.contains("Рисунок 1 \u2014 one") && text.contains("Рисунок 2 \u2014 two"));
+    }
+
     /** Writes target/visual-sample.docx for manual / LibreOffice inspection. */
     @Test void writeVisualSample() throws Exception {
         Element title = text("<h1 style=\"text-align:center\">Weekly report {{date}}</h1>", 40, 30, 515, 40);

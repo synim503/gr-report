@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { EditorContent, useEditor, Editor } from '@tiptap/react'
 import { El, Tpl } from '../types'
 import { Action } from '../lib/model'
@@ -9,6 +9,7 @@ import { panelImageUrl, resolveRefs } from '../api'
 import { ChartPreview } from './ChartPreview'
 import { extensions } from './editorExtensions'
 import { Icon } from './Icon'
+import { CAP_H, captionLine, figureNumbers, hasCaption, pictureArea } from '../lib/captions'
 
 export const DND_MIME = 'application/x-reporter'
 export type DropPayload =
@@ -51,6 +52,7 @@ export function PageView(p: Props) {
   const innerRef = useRef<HTMLDivElement>(null)
   const [guides, setGuides] = useState<{ v: number[]; h: number[] }>({ v: [], h: [] })
   const [dropping, setDropping] = useState(false)
+  const numbers = useMemo(() => figureNumbers(tpl), [tpl])
   const latest = useRef({ p, page })
   latest.current = { p, page }
 
@@ -156,7 +158,7 @@ export function PageView(p: Props) {
         <div ref={innerRef} className="page-inner" style={{ width: tpl.pageWidth, height: tpl.pageHeight, transform: `scale(${scale})` }}>
           <div className="margin-box" style={{ left: 36, top: 36, width: tpl.pageWidth - 72, height: tpl.pageHeight - 72 }} />
           {page.elements.map(el => (
-            <ElementView key={el.id} el={el} tpl={tpl} selected={selectedHere.includes(el.id)} multi={selectedHere.length > 1}
+            <ElementView key={el.id} el={el} tpl={tpl} figure={numbers[el.id]} selected={selectedHere.includes(el.id)} multi={selectedHere.length > 1}
               editing={editingId === el.id}
               onDown={e => onElDown(e, el)}
               onDouble={() => { if (el.type === 'text') { p.onSelect({ page: index, ids: [el.id] }); p.dispatch({ t: 'checkpoint' }); p.onEdit(el.id) } }}
@@ -184,7 +186,7 @@ export function PageView(p: Props) {
 }
 
 function ElementView(p: {
-  el: El; tpl: Tpl; selected: boolean; multi: boolean; editing: boolean
+  el: El; tpl: Tpl; figure?: number; selected: boolean; multi: boolean; editing: boolean
   onDown: (e: React.PointerEvent) => void; onDouble: () => void; onHtml: (h: string) => void; onEditor: (e: Editor | null) => void
 }) {
   const { el } = p
@@ -197,25 +199,38 @@ function ElementView(p: {
         ? <TextEditor html={el.html ?? ''} lineHeight={el.lineHeight ?? 1} onHtml={p.onHtml} onEditor={p.onEditor} />
         : <div className="text-static" data-testid="text-static" style={{ lineHeight: el.lineHeight ?? 1 }}
             dangerouslySetInnerHTML={{ __html: sanitizeHtml(substitutePreview(el.html ?? '', p.tpl)) }} />)}
-      {el.type === 'chart' && el.chart && <VarBadge vars={el.chart.vars} report={p.tpl.variables} />}
-      {el.type === 'chart' && el.chart && <ChartPreview title={el.chart.title}
-        url={panelImageUrl({ ...el.chart, from: el.chart.from || p.tpl.timeRange.from, to: el.chart.to || p.tpl.timeRange.to },
-          Math.max(100, Math.round(el.w * 96 / 72 / 50) * 50), Math.max(60, Math.round(el.h * 96 / 72 / 50) * 50), p.tpl.variables)} />}
-      {el.type === 'image' && (el.dataUrl ? <img src={el.dataUrl} alt="" /> : <div className="ph">Изображение</div>)}
+      {(el.type === 'chart' || el.type === 'image') && (() => {
+        const area = pictureArea(el)
+        return (
+          <div className="pic" style={{ top: area.top, height: area.height }}>
+            {el.type === 'chart' && el.chart && <>
+              <VarBadge vars={el.chart.vars} report={p.tpl.variables} w={el.w} h={area.height} />
+              <ChartPreview title={el.chart.title}
+                url={panelImageUrl({ ...el.chart, from: el.chart.from || p.tpl.timeRange.from, to: el.chart.to || p.tpl.timeRange.to },
+                  Math.max(100, Math.round(el.w * 96 / 72 / 50) * 50), Math.max(60, Math.round(area.height * 96 / 72 / 50) * 50), p.tpl.variables)} />
+            </>}
+            {el.type === 'image' && (el.dataUrl ? <img src={el.dataUrl} alt="" /> : <div className="ph">Изображение</div>)}
+          </div>
+        )
+      })()}
+      {hasCaption(el) && p.figure !== undefined && (
+        <div className="cap" data-testid="figure-caption" style={{ height: CAP_H, ...(el.caption!.position === 'above' ? { top: 0 } : { bottom: 0 }) }}>
+          <b>{(p.tpl.captionLabel?.trim() || 'Рисунок')} {p.figure}</b>
+          {substitutePreview(el.caption!.text ?? '', p.tpl).trim() ? ` — ${substitutePreview(el.caption!.text, p.tpl).trim()}` : ''}
+        </div>
+      )}
     </div>
   )
 }
 
-/** Editor-only chips showing which dashboard variables the chart is rendered with (not part of the document). */
-function VarBadge({ vars, report }: { vars?: Record<string, string>; report: Record<string, string> }) {
-  const e = Object.entries(vars ?? {}).filter(([, v]) => v !== '')
+/** Editor-only chip line showing which dashboard variables the chart is rendered with (not part of the document). */
+function VarBadge({ vars, report, w, h }: { vars?: Record<string, string>; report: Record<string, string>; w: number; h: number }) {
+  const e = Object.entries(vars ?? {}).filter(([, v]) => v !== '').map(([k, v]) => [k, resolveRefs(v, report)] as const)
   if (!e.length) return null
-  return (
-    <div className="var-badge" data-testid="var-badge">
-      {e.slice(0, 4).map(([k, v]) => <span key={k}><b>{k}</b> {resolveRefs(v, report)}</span>)}
-      {e.length > 4 && <span>+{e.length - 4}</span>}
-    </div>
-  )
+  const title = e.map(([k, v]) => `${k} = ${v}`).join('\n')
+  if (w < 150 || h < 60)                                    // small charts: just a counter, details in the tooltip
+    return <div className="var-badge mini" data-testid="var-badge" title={title}><span>{e.length}</span></div>
+  return <div className="var-badge" data-testid="var-badge" title={title}><span>{e.map(([k, v]) => `${k} ${v}`).join(' · ')}</span></div>
 }
 
 /** Shows report variables / built-ins in the canvas the way they will appear in the document. */

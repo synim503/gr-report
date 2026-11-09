@@ -93,7 +93,7 @@ export function Sidebar(p: Props) {
                 <div className="vars-card" data-testid="dash-vars">
                   <div className="cap"><Icon name="braces" size={13} /> Переменные дашборда</div>
                   {details[d.uid].variables.map(v => (
-                    <VarField key={v.name} name={v.name} label={v.label} testid={`sv-${v.name}`} options={v.options} value={varVals[d.uid]?.[v.name] ?? ''}
+                    <VarField key={v.name} name={v.name} label={v.label} testid={`sv-${v.name}`} options={v.options} load={v.dynamic ? () => api.varOptions(d.uid, v.name, varVals[d.uid] ?? {}) : undefined} value={varVals[d.uid]?.[v.name] ?? ''}
                       onChange={x => setVarVals(s => ({ ...s, [d.uid]: { ...s[d.uid], [v.name]: x } }))} />
                   ))}
                   <div className="muted" style={{ fontSize: 11 }}>Попадут в добавляемые графики и блок</div>

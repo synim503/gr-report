@@ -24,6 +24,7 @@ test('settings: parallelism is validated, saved and shown again', async ({ page,
 
 test('the parallelism setting really limits concurrent chart renders', async ({ page, request }) => {
   await slowTemplate(request, 6); await openFirstTemplate(page)
+  await expect(page.getByTestId('chart-img')).toHaveCount(6)                   // editor previews are slow too: let them finish first
   await page.getByTestId('open-settings').click(); await page.getByTestId('set-parallel').fill('2'); await page.getByTestId('set-save').click()
   await request.get(`${GRAFANA}/__reset`)
   let t0 = Date.now()

@@ -25,7 +25,10 @@ export interface El {
   dataUrl?: string
   /** Charts inserted as one block share a group id and move / get parameterised together. */
   group?: { id: string; presetId?: string; name?: string }
+  /** Figure caption of a chart / image: "Рисунок N — text", N is assigned automatically in reading order. */
+  caption?: Caption
 }
+export interface Caption { text: string; position: 'above' | 'below' }
 
 export interface Page { elements: El[] }
 
@@ -37,6 +40,7 @@ export interface Tpl {
   timeRange: { from: string; to: string }
   /** Report variables: {{name}} in texts and chart variable values. */
   variables: Record<string, string>
+  captionLabel?: string
   pages: Page[]
   updatedAt?: string
 }
@@ -49,7 +53,7 @@ export const PAGE_SIZES: Record<string, { w: number; h: number }> = {
   Letter: { w: 612, h: 792 },
 }
 
-export interface BlockVar { name: string; label?: string; defaultValue: string; options?: string[] }
+export interface BlockVar { name: string; label?: string; defaultValue: string; options?: string[]; dynamic?: boolean }
 export interface BlockChart { panelId: number; title?: string; x: number; y: number; w: number; h: number }
 export interface Block {
   id?: string
@@ -64,7 +68,7 @@ export interface Block {
 export interface DashboardSummary { uid: string; title: string; folder?: string; tags: string[] }
 export interface PanelInfo { id: number; title: string; type: string; gridX: number; gridY: number; gridW: number; gridH: number }
 export interface DashboardInfo { uid: string; title: string; slug: string; panels: PanelInfo[]; variables: DashVar[] }
-export interface DashVar { name: string; label: string; type: string; defaultValue: string; options: string[] }
+export interface DashVar { name: string; label: string; type: string; defaultValue: string; options: string[]; dynamic: boolean; includeAll: boolean }
 export interface SettingsView { grafanaUrl: string; tokenSet: boolean; tokenHint: string; orgId: number; imageScale: number; parallelism: number }
 export type JobState = 'RUNNING' | 'DONE' | 'FAILED' | 'CANCELLED'
 export interface JobView { id: string; name: string; state: JobState; done: number; total: number; startedAt: number; finishedAt?: number; error?: string; warnings: string[]; sizeBytes?: number }

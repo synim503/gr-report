@@ -20,6 +20,9 @@ public class Template {
     /** Default Grafana time range for charts that do not override it. */
     @Valid
     public TimeRange timeRange = new TimeRange();
+    /** Prefix of figure captions ("Рисунок" → "Рисунок 1 — …"). */
+    @Size(max = 40)
+    public String captionLabel = "Рисунок";
     /** Report-level variables. Usable as {{name}} in texts and in chart variable values. */
     @Size(max = 100)
     public java.util.Map<String, @Size(max = 500) String> variables = new java.util.LinkedHashMap<>();
@@ -57,6 +60,8 @@ public class Template {
         @DecimalMin("0.5") @DecimalMax("5") public double lineHeight = 1.0;
         // chart
         @Valid public Chart chart;
+        /** Optional caption of a chart / image; the figure number is assigned automatically in reading order. */
+        @Valid public Caption caption;
         /** Set when the element belongs to an inserted block (a group of charts edited together). */
         @Valid public Group group;
         // image
@@ -68,6 +73,12 @@ public class Template {
         @Size(max = 100) public String id;
         @Size(max = 100) public String presetId;
         @Size(max = 200) public String name;
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class Caption {
+        @Size(max = 500) public String text = "";
+        @Pattern(regexp = "^(above|below)$") public String position = "below";
     }
 
     public enum Type { text, chart, image }

@@ -76,3 +76,16 @@ describe('block actions', () => {
     expect(s.tpl.pages[0].elements).toHaveLength(0)
   })
 })
+
+describe('captions action', () => {
+  it('sets and removes captions in one undo step', () => {
+    let s = init()
+    const els = [makeEl('chart', 0, 0, { chart: { dashboardUid: 'u', panelId: 1 } }), makeEl('chart', 0, 100, { chart: { dashboardUid: 'u', panelId: 2 } })]
+    s = reducer(s, { t: 'addMany', page: 0, els })
+    s = reducer(s, { t: 'captions', page: 0, items: { [els[0].id]: { text: 'a', position: 'below' }, [els[1].id]: { text: 'b', position: 'above' } } })
+    expect(s.tpl.pages[0].elements.map(e => e.caption?.text)).toEqual(['a', 'b'])
+    s = reducer(s, { t: 'captions', page: 0, items: { [els[0].id]: null } })
+    expect(s.tpl.pages[0].elements[0].caption).toBeUndefined(); expect(s.tpl.pages[0].elements[1].caption?.position).toBe('above')
+    s = reducer(s, { t: 'undo' }); expect(s.tpl.pages[0].elements[0].caption?.text).toBe('a')
+  })
+})

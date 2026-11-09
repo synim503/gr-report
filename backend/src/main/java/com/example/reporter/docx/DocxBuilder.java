@@ -38,6 +38,7 @@ public class DocxBuilder {
     private XWPFDocument doc;
     private XWPFNumbering numbering;
     private int docPrId = 1;
+    private Map<Element, Integer> figureNumbers = Map.of();
 
     public DocxBuilder(Template template, Map<Element, Image> images, Map<String, String> vars) {
         this.template = template;
@@ -52,6 +53,7 @@ public class DocxBuilder {
             setupNumbering();
             doc.getProperties().getCoreProperties().setTitle(template.name);
             doc.getProperties().getCoreProperties().setCreator("Grafana Reporter");
+            figureNumbers = Captions.number(template);
             List<Page> pages = template.pages;
             for (int i = 0; i < pages.size(); i++) renderPage(pages.get(i), i);
             ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -136,13 +138,42 @@ public class DocxBuilder {
             if (img == null) continue;
             XWPFRun run = host.createRun();
             boolean behind = els.stream().anyMatch(t -> t.type == Template.Type.text && t.z > e.z && overlaps(t, e));
-            addAnchoredPicture(run, img, e, behind, rel + e.z);
+            addAnchoredPicture(run, img, Captions.pictureBox(e), behind, rel + e.z);
         }
         for (Element e : els) {
             if (e.type != Template.Type.text) continue;
             renderText(e);
             tinyParagraph(doc.createParagraph());   // separates neighbouring frames
         }
+        for (Element e : Captions.ordered(page.elements)) {      // numbering order == SEQ field order in the document
+            renderCaption(e, figureNumbers.get(e));
+            tinyParagraph(doc.createParagraph());
+        }
+    }
+
+    /** "Рисунок {SEQ} — text" as a frame under (or above) the picture; the number is a real Word SEQ field. */
+    private void renderCaption(Element e, int number) {
+        Element box = Captions.captionBox(e);
+        RunStyle base = new RunStyle(false, false, false, false, null, null, 10, DEFAULT_FONT, null, null);
+        XWPFParagraph p = newParagraph(new Ctx(box, null, -1, "center", false), base);
+        p.setSpacingAfter(0);
+        RunStyle bold = base.with(b -> { b.bold = true; return b; });
+        String label = template.captionLabel == null || template.captionLabel.isBlank() ? "Рисунок" : template.captionLabel.trim();
+        addText(p, label + " ", bold);
+        field(p, " SEQ " + Captions.seqName(label) + " \\* ARABIC ", String.valueOf(number), bold);
+        String text = e.caption.text == null ? "" : e.caption.text.trim();
+        if (!text.isEmpty()) addText(p, " \u2014 " + stripTags(substitute(text)), base);
+    }
+
+    private static String stripTags(String s) { return s.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">"); }
+
+    /** Complex field (begin / instruction / separate / cached result / end) so Word can update the numbering. */
+    private void field(XWPFParagraph p, String instr, String cached, RunStyle st) {
+        XWPFRun r = p.createRun(); r.getCTR().addNewFldChar().setFldCharType(STFldCharType.BEGIN);
+        r = p.createRun(); CTText it = r.getCTR().addNewInstrText(); it.setStringValue(instr); it.setSpace(org.apache.xmlbeans.impl.xb.xmlschema.SpaceAttribute.Space.PRESERVE);
+        r = p.createRun(); r.getCTR().addNewFldChar().setFldCharType(STFldCharType.SEPARATE);
+        addText(p, cached, st);
+        r = p.createRun(); r.getCTR().addNewFldChar().setFldCharType(STFldCharType.END);
     }
 
     private static boolean overlaps(Element a, Element b) {

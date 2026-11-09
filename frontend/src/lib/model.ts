@@ -1,4 +1,4 @@
-import { El, Tpl, Page, ChartSpec, ElType } from '../types'
+import { El, Tpl, Page, ChartSpec, ElType, Caption } from '../types'
 import { clampToPage } from './geometry'
 
 export interface State {
@@ -20,6 +20,7 @@ export type Action =
   | { t: 'addMany'; page: number; els: El[] }
   | { t: 'chartVars'; page: number; ids: string[]; vars: Record<string, string> }
   | { t: 'ungroup'; page: number; ids: string[] }
+  | { t: 'captions'; page: number; items: Record<string, Caption | null> }
   | { t: 'addPage' }
   | { t: 'removePage'; page: number }
   | { t: 'meta'; patch: Partial<Omit<Tpl, 'pages'>> }
@@ -29,7 +30,7 @@ export type Action =
   | { t: 'saved'; id: string; updatedAt?: string }
 
 export const emptyTpl = (): Tpl => ({
-  name: 'Новый отчёт', pageWidth: 595.28, pageHeight: 841.89, timeRange: { from: 'now-6h', to: 'now' }, variables: {}, pages: [{ elements: [] }],
+  name: 'Новый отчёт', pageWidth: 595.28, pageHeight: 841.89, timeRange: { from: 'now-6h', to: 'now' }, variables: {}, captionLabel: 'Рисунок', pages: [{ elements: [] }],
 })
 
 let counter = 0
@@ -71,6 +72,12 @@ export function reducer(s: State, a: Action): State {
     case 'ungroup': return withHistory(s, mapPage(s.tpl, a.page, els => els.map(e => {
       if (!a.ids.includes(e.id)) return e
       const { group: _g, ...rest } = e; return rest as El })))
+    case 'captions': return withHistory(s, mapPage(s.tpl, a.page, els => els.map(e => {
+      if (!(e.id in a.items)) return e
+      const c = a.items[e.id]
+      if (c) return { ...e, caption: c }
+      const { caption: _c, ...rest } = e; return rest as El
+    })))
     case 'remove': return withHistory(s, mapPage(s.tpl, a.page, els => els.filter(e => !a.ids.includes(e.id))))
     case 'duplicate': return withHistory(s, mapPage(s.tpl, a.page, els => {
       let z = nextZ(els)

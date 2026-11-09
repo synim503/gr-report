@@ -64,7 +64,7 @@ export function InsertBlockDialog({ block, onInsert, onClose }: { block: Block; 
         Можно указать <code>{'{{имя}}'}</code> — тогда значение берётся из переменных отчёта.</p>
       {block.variables.length === 0 && <p className="muted">У блока нет переменных.</p>}
       {block.variables.map(v => (
-        <VarField key={v.name} name={v.name} label={v.label} testid={`bv-${v.name}`} value={vals[v.name] ?? ''} options={v.options}
+        <VarField key={v.name} name={v.name} label={v.label} testid={`bv-${v.name}`} value={vals[v.name] ?? ''} options={v.options} load={v.dynamic ? () => api.varOptions(block.dashboardUid, v.name, vals) : undefined}
           onChange={x => setVals({ ...vals, [v.name]: x })} />
       ))}
       {!block.id && <label className="row"><input data-testid="bv-save" type="checkbox" checked={save} onChange={e => setSave(e.target.checked)} /> Сохранить в библиотеку блоков</label>}

@@ -97,6 +97,16 @@ public class Controllers {
         return ResponseEntity.ok().cacheControl(CacheControl.maxAge(java.time.Duration.ofSeconds(30)).cachePrivate()).body(png);
     }
 
+    /** Values of one dashboard variable; other variables' current values (var-NAME=…) are used for chained queries. */
+    @GetMapping("/grafana/dashboards/{uid}/variables/{name}/options")
+    public Map<String, Object> variableOptions(@PathVariable String uid, @PathVariable String name, @RequestParam Map<String, String> all) {
+        requireUid(uid);
+        if (!name.matches("^[A-Za-z0-9_\\-.]{1,64}$")) throw new IllegalArgumentException("invalid variable name");
+        Map<String, String> current = new HashMap<>();
+        all.forEach((k, v) -> { if (k.startsWith("var-")) current.put(k.substring(4), v); });
+        return Map.of("options", grafana.variableOptions(grafana.saved(), uid, name, current));
+    }
+
     /** Block preset generated from the dashboard grid: all panels, same relative layout, variables with their defaults. */
     @GetMapping("/grafana/dashboards/{uid}/block")
     public Block dashboardBlock(@PathVariable String uid, @RequestParam(defaultValue = "515") double width) {

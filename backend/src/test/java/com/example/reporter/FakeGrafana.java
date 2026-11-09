@@ -22,6 +22,7 @@ public class FakeGrafana implements AutoCloseable {
     public final HttpServer server;
     public final List<String> requests = new CopyOnWriteArrayList<>();
     public final List<String> authHeaders = new CopyOnWriteArrayList<>();
+    public final List<String> proxyRequests = new CopyOnWriteArrayList<>();
     public final AtomicInteger inflight = new AtomicInteger(), maxInflight = new AtomicInteger();
 
     public FakeGrafana() throws IOException { this(0); }
@@ -38,15 +39,60 @@ public class FakeGrafana implements AutoCloseable {
         server.createContext("/api/search", ex -> {
             if (!auth(ex)) return;
             String q = Optional.ofNullable(ex.getRequestURI().getQuery()).orElse("");
+            if (q.contains("query=node")) { json(ex, 200, "[{\"uid\":\"nodeexp\",\"title\":\"Node Exporter\",\"tags\":[]}]"); return; }
             if (q.contains("query=tall")) { json(ex, 200, "[{\"uid\":\"tall\",\"title\":\"Tall Dashboard\",\"tags\":[]}]"); return; }
             boolean filter = q.contains("query=cpu");
             json(ex, 200, filter
                 ? "[{\"uid\":\"abc\",\"title\":\"CPU Overview\",\"folderTitle\":\"Infra\",\"tags\":[\"linux\"]}]"
                 : "[{\"uid\":\"abc\",\"title\":\"CPU Overview\",\"folderTitle\":\"Infra\",\"tags\":[\"linux\"]},{\"uid\":\"norender\",\"title\":\"No Renderer\",\"tags\":[]}]");
         });
+        server.createContext("/api/datasources/uid/", ex -> {
+            if (!auth(ex)) return;
+            String id = ex.getRequestURI().getPath().substring("/api/datasources/uid/".length());
+            if (id.equals("promuid")) json(ex, 200, "{\"uid\":\"promuid\",\"name\":\"prom\",\"type\":\"prometheus\"}");
+            else if (id.equals("lokiuid")) json(ex, 200, "{\"uid\":\"lokiuid\",\"name\":\"loki\",\"type\":\"loki\"}");
+            else json(ex, 404, "{\"message\":\"Data source not found\"}");
+        });
+        server.createContext("/api/datasources/name/", ex -> {
+            if (!auth(ex)) return;
+            String id = ex.getRequestURI().getPath().substring("/api/datasources/name/".length());
+            if (id.equals("prom")) json(ex, 200, "{\"uid\":\"promuid\",\"name\":\"prom\",\"type\":\"prometheus\"}");
+            else json(ex, 404, "{\"message\":\"Data source not found\"}");
+        });
+        server.createContext("/api/datasources/proxy/uid/promuid/api/v1/label/", ex -> {
+            if (!auth(ex)) return;
+            proxyRequests.add(ex.getRequestURI().toString());
+            String label = ex.getRequestURI().getPath().replaceAll(".*/label/([^/]+)/values", "$1");
+            String match = Optional.ofNullable(ex.getRequestURI().getQuery()).orElse("");
+            String vals;
+            if (label.equals("job")) vals = "[\"node\",\"app\"]";
+            else if (match.contains("job=\"app\"")) vals = "[\"app1\"]";
+            else if (match.contains("job=\"node\"")) vals = "[\"srv2\",\"srv1\"]";
+            else if (match.contains("job=~\".*\"")) vals = "[\"srv1\",\"app1\",\"srv2\"]";
+            else vals = "[]";
+            json(ex, 200, "{\"status\":\"success\",\"data\":" + vals + "}");
+        });
         server.createContext("/api/dashboards/uid/", ex -> {
             if (!auth(ex)) return;
             String uid = ex.getRequestURI().getPath().substring("/api/dashboards/uid/".length());
+            if (uid.equals("nodeexp")) {
+                json(ex, 200, "{\"meta\":{\"url\":\"/d/nodeexp/node\"},\"dashboard\":{\"title\":\"Node Exporter\",\"templating\":{\"list\":[" +
+                    "{\"name\":\"ds\",\"type\":\"datasource\",\"current\":{\"value\":\"prom\"}}," +
+                    "{\"name\":\"job\",\"type\":\"query\",\"datasource\":{\"type\":\"prometheus\",\"uid\":\"${ds}\"},\"query\":\"label_values(node_uname_info, job)\",\"current\":{\"value\":\"node\"},\"options\":[]}," +
+                    "{\"name\":\"nodename\",\"type\":\"query\",\"datasource\":\"${ds}\",\"query\":{\"query\":\"label_values(node_uname_info{job=\\\"$job\\\"}, nodename)\"},\"includeAll\":true,\"current\":{\"value\":\"srv1\"},\"options\":[]}," +
+                    "{\"name\":\"logs\",\"type\":\"query\",\"datasource\":{\"type\":\"loki\",\"uid\":\"lokiuid\"},\"query\":\"label_values(app)\",\"current\":{\"value\":\"\"}}," +
+                    "{\"name\":\"env\",\"type\":\"custom\",\"query\":\"prod,stage\",\"current\":{\"value\":\"prod\"},\"options\":[]}]}," +
+                    "\"panels\":[" +
+                    "{\"id\":1,\"title\":\"A\",\"type\":\"stat\",\"gridPos\":{\"x\":0,\"y\":0,\"w\":6,\"h\":4}}," +
+                    "{\"id\":2,\"title\":\"B\",\"type\":\"stat\",\"gridPos\":{\"x\":6,\"y\":0,\"w\":6,\"h\":4}}," +
+                    "{\"type\":\"row\",\"title\":\"CPU (collapsed)\",\"collapsed\":true,\"gridPos\":{\"x\":0,\"y\":4,\"w\":24,\"h\":1},\"panels\":[" +
+                        "{\"id\":3,\"title\":\"C\",\"type\":\"timeseries\",\"gridPos\":{\"x\":0,\"y\":5,\"w\":12,\"h\":8}}," +
+                        "{\"id\":4,\"title\":\"D\",\"type\":\"timeseries\",\"gridPos\":{\"x\":12,\"y\":5,\"w\":12,\"h\":8}}]}," +
+                    "{\"id\":5,\"title\":\"E\",\"type\":\"timeseries\",\"gridPos\":{\"x\":0,\"y\":5,\"w\":24,\"h\":8}}," +
+                    "{\"type\":\"row\",\"title\":\"Memory\",\"collapsed\":false,\"gridPos\":{\"x\":0,\"y\":13,\"w\":24,\"h\":1},\"panels\":[]}," +
+                    "{\"id\":6,\"title\":\"F\",\"type\":\"timeseries\",\"gridPos\":{\"x\":0,\"y\":14,\"w\":24,\"h\":6}}]}}");
+                return;
+            }
             if (uid.equals("tall")) {            // 40 panels, 20 grid rows of 8 -> far taller than one page
                 StringBuilder ps = new StringBuilder();
                 for (int i = 0; i < 40; i++) ps.append(i > 0 ? "," : "").append("{\"id\":").append(i + 1).append(",\"title\":\"Panel ").append(i + 1)
@@ -61,7 +107,7 @@ public class FakeGrafana implements AutoCloseable {
                 "{\"name\":\"job\",\"type\":\"custom\",\"current\":{\"value\":[\"$__all\"]},\"options\":[{\"value\":\"$__all\"},{\"value\":\"node\"},{\"value\":\"app\"}]}]},\"panels\":[" +
                 "{\"id\":1,\"title\":\"CPU usage\",\"type\":\"timeseries\",\"gridPos\":{\"x\":0,\"y\":0,\"w\":12,\"h\":8}}," +
                 "{\"id\":2,\"title\":\"Memory\",\"type\":\"gauge\",\"gridPos\":{\"x\":12,\"y\":0,\"w\":6,\"h\":6}}," +
-                "{\"type\":\"row\",\"title\":\"Collapsed\",\"panels\":[{\"id\":3,\"title\":\"Disk\",\"type\":\"bargauge\",\"gridPos\":{\"x\":0,\"y\":8,\"w\":12,\"h\":8}}]}]}}");
+                "{\"type\":\"row\",\"title\":\"Collapsed\",\"collapsed\":true,\"gridPos\":{\"x\":0,\"y\":8,\"w\":24,\"h\":1},\"panels\":[{\"id\":3,\"title\":\"Disk\",\"type\":\"bargauge\",\"gridPos\":{\"x\":0,\"y\":8,\"w\":12,\"h\":8}}]}]}}");
         });
         server.createContext("/render/d-solo/", ex -> {
             requests.add(ex.getRequestURI().toString());

@@ -18,6 +18,11 @@ export const api = {
   dashboards: (q: string) => req<DashboardSummary[]>(`/api/grafana/dashboards?query=${encodeURIComponent(q)}`),
   dashboard: (uid: string) => req<DashboardInfo>(`/api/grafana/dashboards/${encodeURIComponent(uid)}`),
   dashboardBlock: (uid: string, width: number) => req<Block>(`/api/grafana/dashboards/${encodeURIComponent(uid)}/block?width=${width}`),
+  /** Values of a dashboard variable from Grafana (query variables are resolved through the datasource; `current` feeds chained variables). */
+  varOptions: async (uid: string, name: string, current: Record<string, string> = {}) => {
+    const q = new URLSearchParams(); for (const [k, v] of Object.entries(current)) if (v) q.set(`var-${k}`, v)
+    return (await req<{ options: string[] }>(`/api/grafana/dashboards/${encodeURIComponent(uid)}/variables/${encodeURIComponent(name)}/options?${q}`)).options
+  },
   templates: () => req<{ id: string; name: string; updatedAt?: string }[]>('/api/templates'),
   template: (id: string) => req<Tpl>(`/api/templates/${id}`),
   saveTemplate: (t: Tpl) => t.id ? req<Tpl>(`/api/templates/${t.id}`, json('PUT', t)) : req<Tpl>('/api/templates', json('POST', t)),

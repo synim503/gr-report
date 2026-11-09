@@ -2,6 +2,8 @@ package com.example.reporter;
 
 import com.example.reporter.grafana.GrafanaClient;
 import com.example.reporter.grafana.GrafanaClient.Connection;
+import com.example.reporter.grafana.GrafanaClient.PanelInfo;
+import com.example.reporter.grafana.GrafanaClient.Variable;
 import com.example.reporter.grafana.GrafanaException;
 import com.example.reporter.store.SettingsStore;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -68,6 +70,39 @@ class GrafanaClientTest {
         assertEquals(java.util.List.of("srv-default", "web-01", "db-02"), d.variables().get(0).options());
         assertEquals(java.util.List.of("All", "node", "app"), d.variables().get(1).options(), "$__all is shown as All");
         assertEquals(12, d.panels().get(1).gridX()); assertEquals(8, d.panels().get(2).gridY());
+    }
+
+    @Test void collapsedRowsAreExpandedAndPanelsBelowAreShiftedDown() {
+        var ps = client.dashboard(good, "nodeexp").panels();
+        assertEquals(6, ps.size(), "rows themselves are not panels");
+        java.util.function.Function<String, PanelInfo> by = t -> ps.stream().filter(p -> p.title().equals(t)).findFirst().orElseThrow();
+        assertEquals(0, by.apply("A").gridY()); assertEquals(5, by.apply("C").gridY()); assertEquals(5, by.apply("D").gridY());
+        assertEquals(13, by.apply("E").gridY(), "E sat at y=5 while the CPU row was collapsed; expanded it moves below C/D (5+8)");
+        assertEquals(22, by.apply("F").gridY(), "…and everything after it moves by the same 8 rows");
+        for (var a : ps) for (var b : ps) if (a != b) assertFalse(a.gridX() < b.gridX() + b.gridW() && b.gridX() < a.gridX() + a.gridW()
+                && a.gridY() < b.gridY() + b.gridH() && b.gridY() < a.gridY() + a.gridH(), a.title() + " overlaps " + b.title());
+    }
+
+    @Test void queryVariablesAreResolvedThroughTheDatasourceWithChainedValues() {
+        var d = client.dashboard(good, "nodeexp");
+        assertEquals(java.util.List.of("job", "nodename", "logs", "env"), d.variables().stream().map(Variable::name).toList(), "datasource variable hidden");
+        assertTrue(d.variables().get(0).dynamic()); assertFalse(d.variables().get(3).dynamic());
+        assertEquals(java.util.List.of("app", "node"), client.variableOptions(good, "nodeexp", "job", Map.of()), "values sorted");
+        grafana.proxyRequests.clear();
+        assertEquals(java.util.List.of("All", "srv1", "srv2"), client.variableOptions(good, "nodeexp", "nodename", Map.of("job", "node")));
+        assertTrue(grafana.proxyRequests.get(0).contains("match%5B%5D=node_uname_info%7Bjob%3D%22node%22%7D"), grafana.proxyRequests.get(0));
+        assertTrue(grafana.proxyRequests.get(0).contains("/label/nodename/values"));
+        assertEquals(java.util.List.of("All", "app1"), client.variableOptions(good, "nodeexp", "nodename", Map.of("job", "app")), "depends on $job");
+        assertEquals(java.util.List.of("All", "srv1", "srv2"), client.variableOptions(good, "nodeexp", "nodename", Map.of()), "falls back to the dashboard's current job");
+        assertEquals(java.util.List.of("All", "app1", "srv1", "srv2"), client.variableOptions(good, "nodeexp", "nodename", Map.of("job", "All")), "All becomes a regex");
+        assertEquals(java.util.List.of("prod", "stage"), client.variableOptions(good, "nodeexp", "env", Map.of()));
+    }
+
+    @Test void unsupportedOrUnknownVariablesGiveClearErrors() {
+        var e = assertThrows(GrafanaException.class, () -> client.variableOptions(good, "nodeexp", "logs", Map.of()));
+        assertEquals(422, e.status()); assertTrue(e.getMessage().contains("loki"));
+        assertEquals(404, assertThrows(GrafanaException.class, () -> client.variableOptions(good, "nodeexp", "nope", Map.of())).status());
+        assertEquals(401, assertThrows(GrafanaException.class, () -> client.variableOptions(new Connection(grafana.url(), "bad", 1), "nodeexp", "job", Map.of())).status());
     }
 
     @Test void missingDashboardIs404() {

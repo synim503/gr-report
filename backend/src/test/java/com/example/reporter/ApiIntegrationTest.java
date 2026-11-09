@@ -388,4 +388,41 @@ class ApiIntegrationTest {
         assertTrue(grafana.requests.stream().allMatch(q -> FakeGrafana.query(q.substring(q.indexOf('?') + 1)).get("var-host").equals("job-host")));
         assertEquals(HttpStatus.NOT_FOUND, rest.getForEntity("/api/reports/jobs/nope", Map.class).getStatusCode());
     }
+
+    @Test @Order(28) void variableOptionsEndpoint() throws Exception {
+        configure();
+        var r = map(rest.getForEntity("/api/grafana/dashboards/nodeexp/variables/nodename/options?var-job=app", Map.class));
+        assertEquals(java.util.List.of("All", "app1"), r.get("options"));
+        var d = map(rest.getForEntity("/api/grafana/dashboards/nodeexp", Map.class));
+        assertEquals(4, ((java.util.List<?>) d.get("variables")).size());
+        var loki = rest.getForEntity("/api/grafana/dashboards/nodeexp/variables/logs/options", Map.class);
+        assertEquals(HttpStatus.UNPROCESSABLE_ENTITY, loki.getStatusCode()); assertTrue(loki.getBody().get("message").toString().contains("manually"));
+        assertEquals(HttpStatus.BAD_REQUEST, rest.getForEntity("/api/grafana/dashboards/nodeexp/variables/bad%20name/options", Map.class).getStatusCode());
+        assertEquals(HttpStatus.NOT_FOUND, rest.getForEntity("/api/grafana/dashboards/nodeexp/variables/zzz/options", Map.class).getStatusCode());
+        var block = rest.getForObject("/api/grafana/dashboards/nodeexp/block", Map.class);
+        assertEquals(6, ((java.util.List<?>) block.get("charts")).size());
+        assertEquals(true, ((Map<?, ?>) ((java.util.List<?>) block.get("variables")).get(0)).get("dynamic"));
+    }
+
+    @Test @Order(29) void captionedChartsAreRenderedWithoutTheCaptionLineAndCaptionsReachTheDocument() throws Exception {
+        configure(); parallelism(4); grafana.requests.clear();
+        var plain = chart("abc", 2, 10, 300, 300, 100);
+        var c1 = chart("abc", 1, 10, 10, 300, 100); c1.caption = new Template.Caption(); c1.caption.text = "Загрузка CPU";
+        var t = template(c1, plain); t.captionLabel = "Рисунок";
+        var r = rest.postForEntity("/api/reports/generate", t, byte[].class);
+        var reqs = grafana.requests.stream().map(q -> FakeGrafana.query(q.substring(q.indexOf('?') + 1))).toList();
+        var rc = reqs.stream().filter(q -> q.get("panelId").equals("1")).findFirst().get();
+        var rp = reqs.stream().filter(q -> q.get("panelId").equals("2")).findFirst().get();
+        assertEquals(String.valueOf(Math.round((100 - 22) * 96 / 72.0 * 1.5)), rc.get("height"));       // 156
+        assertEquals(String.valueOf(Math.round(100 * 96 / 72.0 * 1.5)), rp.get("height"));              // 200
+        var doc = new XWPFDocument(new ByteArrayInputStream(r.getBody()));
+        assertTrue(doc.getDocument().xmlText().replaceAll("<w:instrText[^>]*>[^<]*</w:instrText>", "").replaceAll("<[^>]+>", "").contains("Рисунок 1 \u2014 Загрузка CPU"));
+        // persisted with the template
+        var saved = rest.postForEntity("/api/templates", t, Template.class).getBody();
+        var back = rest.getForObject("/api/templates/" + saved.id, Template.class);
+        assertEquals("Загрузка CPU", back.pages.get(0).elements.get(0).caption.text); assertEquals("below", back.pages.get(0).elements.get(0).caption.position);
+        assertNull(back.pages.get(0).elements.get(1).caption);
+        t.pages.get(0).elements.get(0).caption.position = "left";
+        assertEquals(HttpStatus.BAD_REQUEST, rest.postForEntity("/api/reports/generate", t, Map.class).getStatusCode());
+    }
 }
