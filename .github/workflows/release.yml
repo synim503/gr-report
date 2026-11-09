@@ -1,17 +1,18 @@
 name: release
 
 # Builds the UI + jar, runs unit tests and publishes a GitHub release.
-# Runs on every push of a v* tag, on manual dispatch, and once for the first push of this file to main.
+# Triggers: a v* tag push, manual dispatch, or a push to main that changes the VERSION file
+# (version = contents of VERSION, notes = RELEASE_NOTES.md). An existing release is never overwritten.
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: Version to release (e.g. 1.0.0)
-        default: '1.0.0'
+        description: Version to release (defaults to the VERSION file)
+        default: ''
   push:
     tags: ['v*']
     branches: [main]
-    paths: ['.github/workflows/release.yml']
+    paths: ['VERSION']
 
 permissions:
   contents: write
@@ -34,32 +35,18 @@ jobs:
       - name: Build jar with embedded UI
         run: scripts/build.sh
 
-      - name: Resolve version
-        id: v
-        run: |
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then V="${GITHUB_REF_NAME#v}"; else V="${{ github.event.inputs.version }}"; fi
-          echo "version=${V:-1.0.0}" >> "$GITHUB_OUTPUT"
-
       - name: Create release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
-          V="${{ steps.v.outputs.version }}"; TAG="v$V"
-          git archive --format=zip -o "grafana-reporter-$V-source.zip" HEAD
-          cp backend/target/grafana-reporter-1.0.0.jar "grafana-reporter-$V.jar"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then V="${GITHUB_REF_NAME#v}"
+          elif [ -n "${INPUT_VERSION}" ]; then V="${INPUT_VERSION}"
+          else V="$(tr -d '[:space:]' < VERSION)"; fi
+          TAG="v$V"
           if gh release view "$TAG" >/dev/null 2>&1; then echo "Release $TAG already exists"; exit 0; fi
-          cat > notes.md <<'NOTES'
-          Первый релиз.
-
-          - Визуальный редактор макета страницы Word (React): drag & drop графиков Grafana, текста и изображений, привязка и выравнивание, несколько страниц, undo/redo.
-          - Форматирование текста как в Word: шрифты, размеры, цвета, списки, заголовки, ссылки, переменные.
-          - Блоки из нескольких графиков одного дашборда с переменными (`var-host=…`).
-          - Подключение к Grafana по токену service account, токен вводится в интерфейсе.
-          - Генерация `.docx` (Java 17, Spring Boot): текст — позиционированные рамки Word, графики — плавающие картинки.
-          - Светлая и тёмная тема.
-
-          Запуск: `java -jar grafana-reporter-VERSION.jar` → http://localhost:8080. Для картинок графиков в Grafana нужен `grafana-image-renderer`.
-          NOTES
-          sed -i "s/VERSION/$V/" notes.md
+          git archive --format=zip -o "grafana-reporter-$V-source.zip" HEAD
+          cp backend/target/grafana-reporter.jar "grafana-reporter-$V.jar"
+          sed "s/VERSION/$V/g" RELEASE_NOTES.md > notes.md
           gh release create "$TAG" --target "$GITHUB_SHA" --title "Grafana Reporter $TAG" --notes-file notes.md \
             "grafana-reporter-$V.jar" "grafana-reporter-$V-source.zip"

@@ -22,7 +22,7 @@
 ```bash
 scripts/build.sh                                   # UI + jar
 GRAFANA_URL=https://grafana.example.com GRAFANA_TOKEN=glsa_xxx \
-  java -jar backend/target/grafana-reporter-1.0.0.jar   # http://localhost:8080
+  java -jar backend/target/grafana-reporter.jar   # http://localhost:8080
 ```
 **Параллельность генерации** (сколько графиков одного отчёта Grafana рендерит одновременно, 1–16, по умолчанию 4) задаётся в настройках ⚙. Чем больше — тем быстрее отчёт, но выше нагрузка на Grafana/renderer.
 

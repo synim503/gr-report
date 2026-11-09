@@ -20,7 +20,7 @@ export default defineConfig({
   },
   webServer: [
     { command: `java -cp ${backend}/target/test-classes:${backend}/target/classes:${cp} com.example.reporter.FakeGrafana 3100`, url: 'http://127.0.0.1:3100/api/health', reuseExistingServer: true, timeout: 60_000 },
-    { command: `rm -rf ${E2E_DATA} && java -jar ${backend}/target/grafana-reporter-1.0.0.jar`, url: 'http://127.0.0.1:8090/api/settings', reuseExistingServer: true, timeout: 90_000,
+    { command: `rm -rf ${E2E_DATA} && java -jar ${backend}/target/grafana-reporter.jar`, url: 'http://127.0.0.1:8090/api/settings', reuseExistingServer: true, timeout: 90_000,
       env: { PORT: '8090', DATA_DIR: E2E_DATA } },
     { command: 'npx vite --port 5173 --host 127.0.0.1', url: 'http://127.0.0.1:5173', reuseExistingServer: true, timeout: 60_000,
       env: { API_URL: 'http://127.0.0.1:8090' } },
