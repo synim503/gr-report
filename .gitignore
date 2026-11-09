@@ -1,0 +1,7 @@
+node_modules/
+dist/
+target/
+data/
+test-results/
+playwright-report/
+backend/src/main/resources/static/

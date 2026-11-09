@@ -1,0 +1,25 @@
+import { test, expect } from '@playwright/test'
+import { reset, open, addText, API } from './helpers'
+test.skip(!process.env.SHOWCASE_DIR, 'visual sample only')
+test('shots', async ({ page, request }) => {
+  const d = process.env.SHOWCASE_DIR!
+  await page.emulateMedia({ colorScheme: 'light' })
+  await reset(request)
+  await request.put(`${API}/api/settings`, { data: { grafanaUrl: '', token: '' } })
+  await page.goto('/'); await expect(page.getByTestId('onboarding')).toBeVisible()
+  await page.getByTestId('ob-token').fill('glsa_abcdef'); await page.getByTestId('ob-token-toggle').click()
+  await page.screenshot({ path: `${d}/1-onboarding.png` })
+  await reset(request); await open(page)
+  const t = await addText(page, 36, 30)
+  await t.dblclick(); await page.keyboard.press('ControlOrMeta+a'); await page.keyboard.type('Утилизация Linux')
+  await page.keyboard.press('ControlOrMeta+a'); await page.getByTestId('tb-heading').selectOption('1'); await page.getByTestId('tb-center').click()
+  await page.getByTestId('dashboard-item').first().locator('.title').click()
+  await page.getByTestId('dash-as-block').click(); await page.getByTestId('bv-host').fill('web-01')
+  await page.screenshot({ path: `${d}/2-insert-dialog.png` })
+  await page.getByTestId('bv-insert').click(); await expect(page.getByTestId('chart-img')).toHaveCount(3)
+  await page.screenshot({ path: `${d}/3-editor-light.png` })
+  await page.getByTestId('theme-toggle').click(); await page.waitForTimeout(500)
+  await page.screenshot({ path: `${d}/4-editor-dark.png` })
+  await page.getByTestId('topbar-conn').click(); await page.waitForTimeout(500)
+  await page.screenshot({ path: `${d}/5-settings-dark.png` })
+})
