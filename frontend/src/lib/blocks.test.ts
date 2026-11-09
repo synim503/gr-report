@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { instantiateBlock, blockFromElements, expandGroups, groupVars, alignUnits, distributeUnits, moveUnitTo } from './blocks'
+import { instantiateBlock, instantiateBlockPages, blockFromElements, expandGroups, groupVars, alignUnits, distributeUnits, moveUnitTo } from './blocks'
 import { makeEl } from './model'
 import { Block } from '../types'
 
@@ -23,14 +23,45 @@ describe('instantiateBlock', () => {
     const els = instantiateBlock(block, { host: 'web-01' }, 0, 0, page)
     for (const e of els) expect(e.chart!.vars).toEqual({ host: 'web-01', job: 'node' })
   })
-  it('scales down when wider than the page and clamps position inside', () => {
-    const els = instantiateBlock({ ...block, width: 1190, height: 200 }, {}, 400, 0, { w: 595, h: 842 })
-    const right = Math.max(...els.map(e => e.x + e.w)); expect(right).toBeLessThanOrEqual(595.01)
-    expect(els[0].w).toBe(100)
+  it('scales down to the page width (not height) and keeps proportions', () => {
+    const els = instantiateBlock({ ...block, width: 1046, height: 200 }, {}, 400, 0, { w: 595, h: 842 })   // usable width 523 = half
+    expect(Math.max(...els.map(e => e.x + e.w))).toBeLessThanOrEqual(595.01)
+    expect(els[0].w).toBeCloseTo(200 * 523 / 1046, 0)
+    expect(els[0].h / els[0].w).toBeCloseTo(0.5, 1)
   })
   it('clamps drop position so the block stays on the page', () => {
     const els = instantiateBlock(block, {}, 500, 800, page)
     expect(Math.max(...els.map(e => e.x + e.w))).toBeLessThanOrEqual(595); expect(Math.max(...els.map(e => e.y + e.h))).toBeLessThanOrEqual(842)
+  })
+})
+
+describe('whole dashboards (taller than a page)', () => {
+  // 30 grid rows of two half-width charts, 100pt tall each -> 3000pt: needs ~4 pages
+  const tall: Block = { id: 't', name: 'Linux', dashboardUid: 'lin', width: 400, height: 3000, variables: [{ name: 'host', defaultValue: 'a' }],
+    charts: Array.from({ length: 60 }, (_, i) => ({ panelId: i + 1, title: `P${i + 1}`, x: (i % 2) * 200, y: Math.floor(i / 2) * 100, w: 200, h: 100 })) }
+  const pages = instantiateBlockPages(tall, {}, 300, 500, page)
+
+  it('is split over several pages instead of being squeezed into one', () => {
+    expect(pages.length).toBeGreaterThan(3)
+    expect(pages.flat()).toHaveLength(60)
+    for (const els of pages) for (const e of els) { expect(e.w).toBe(200); expect(e.h).toBe(100) }       // no shrinking
+  })
+  it('keeps every chart inside the page margins and starts each page at the top margin', () => {
+    for (const els of pages) {
+      for (const e of els) { expect(e.y).toBeGreaterThanOrEqual(36); expect(e.y + e.h).toBeLessThanOrEqual(842 - 36 + 0.01); expect(e.x + e.w).toBeLessThanOrEqual(595) }
+      expect(Math.min(...els.map(e => e.y))).toBe(36)
+    }
+  })
+  it('keeps the rows intact: charts of one dashboard row stay together and in order', () => {
+    const order = pages.flat().map(e => e.chart!.panelId); expect(order).toEqual([...order].sort((a, b) => a - b))
+    for (const els of pages) { const ys = els.map(e => e.y); for (let i = 0; i < els.length; i += 2) expect(els[i].y).toBe(els[i + 1].y) }
+  })
+  it('every page has its own group and all charts carry the variables', () => {
+    expect(new Set(pages.map(p => p[0].group!.id)).size).toBe(pages.length)
+    expect(pages.flat().every(e => e.chart!.vars!.host === 'a')).toBe(true)
+  })
+  it('a block that fits one page is still a single page, placed where dropped', () => {
+    const one = instantiateBlockPages(block, {}, 100, 100, page); expect(one).toHaveLength(1); expect(one[0][0].y).toBe(100)
   })
 })
 

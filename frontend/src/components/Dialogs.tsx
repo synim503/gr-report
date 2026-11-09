@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { api } from '../api'
 import { Block, SettingsView } from '../types'
 import { Icon } from './Icon'
+import { VarField } from './VarField'
 import { TokenHelp, TokenInput } from './Onboarding'
 
 export function Modal({ title, onClose, children, testid }: { title: string; onClose: () => void; children: React.ReactNode; testid?: string }) {
@@ -17,6 +18,8 @@ export function SettingsDialog({ initial, onClose, onSaved }: { initial: Setting
   const [token, setToken] = useState('')
   const [orgId, setOrgId] = useState(initial.orgId)
   const [scale, setScale] = useState(initial.imageScale)
+  const [par, setPar] = useState(initial.parallelism ?? 4)
+  const parOk = Number.isInteger(par) && par >= 1 && par <= 16
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null)
   const [busy, setBusy] = useState(false)
   const run = async (f: () => Promise<void>) => { setBusy(true); try { await f() } catch (e) { setResult({ ok: false, message: (e as Error).message }) } finally { setBusy(false) } }
@@ -29,6 +32,11 @@ export function SettingsDialog({ initial, onClose, onSaved }: { initial: Setting
         <button className="danger" data-testid="set-clear" disabled={busy} onClick={() => run(async () => { onSaved(await api.saveSettings({ token: '' })); onClose() })}><Icon name="trash" /> Удалить сохранённый токен</button></div>}
       <div className="row"><label>Org ID</label><input data-testid="set-org" type="number" min={1} value={orgId} onChange={e => setOrgId(Number(e.target.value))} /></div>
       <div className="row"><label>Качество (×)</label><input data-testid="set-scale" type="number" min={1} max={4} step={0.5} value={scale} onChange={e => setScale(Number(e.target.value))} /></div>
+      <div className="row"><label>Параллельность</label>
+        <input data-testid="set-parallel" type="number" min={1} max={16} step={1} value={par} style={{ maxWidth: 90 }} onChange={e => setPar(Number(e.target.value))} />
+        <span className="muted" style={{ fontSize: 12 }}>графиков одного отчёта одновременно (1–16)</span></div>
+      {!parOk && <div className="status bad" data-testid="par-error"><Icon name="alert" />Параллельность: целое число от 1 до 16</div>}
+      <p className="muted" style={{ fontSize: 12, margin: '2px 0 8px' }}>Больше — быстрее отчёты, но выше нагрузка на Grafana и renderer. Для тяжёлых дашбордов начните с 2–4.</p>
       <TokenHelp />
       <p className="muted" style={{ marginTop: 10 }}>Для картинок графиков в Grafana должен быть установлен <code>grafana-image-renderer</code>.</p>
       {result && <div data-testid="test-result" className={`status ${result.ok ? 'ok' : 'bad'}`}><Icon name={result.ok ? 'check' : 'alert'} />{result.message}</div>}
@@ -38,8 +46,8 @@ export function SettingsDialog({ initial, onClose, onSaved }: { initial: Setting
           setResult({ ok: r.ok, message: r.ok ? `✓ Подключено: Grafana ${r.version ?? ''}, организация «${r.org}»` : r.message })
         })}>Проверить</button>
         <button onClick={onClose}>Отмена</button>
-        <button className="primary" data-testid="set-save" disabled={busy || !url} onClick={() => run(async () => {
-          onSaved(await api.saveSettings({ grafanaUrl: url, token: token || undefined, orgId, imageScale: scale })); onClose()
+        <button className="primary" data-testid="set-save" disabled={busy || !url || !parOk} onClick={() => run(async () => {
+          onSaved(await api.saveSettings({ grafanaUrl: url, token: token || undefined, orgId, imageScale: scale, parallelism: par })); onClose()
         })}>Сохранить</button>
       </div>
     </Modal>
@@ -56,8 +64,8 @@ export function InsertBlockDialog({ block, onInsert, onClose }: { block: Block; 
         Можно указать <code>{'{{имя}}'}</code> — тогда значение берётся из переменных отчёта.</p>
       {block.variables.length === 0 && <p className="muted">У блока нет переменных.</p>}
       {block.variables.map(v => (
-        <div className="row" key={v.name}><label title={v.name}>{v.label || v.name}</label>
-          <input data-testid={`bv-${v.name}`} value={vals[v.name] ?? ''} onChange={e => setVals({ ...vals, [v.name]: e.target.value })} /></div>
+        <VarField key={v.name} name={v.name} label={v.label} testid={`bv-${v.name}`} value={vals[v.name] ?? ''} options={v.options}
+          onChange={x => setVals({ ...vals, [v.name]: x })} />
       ))}
       {!block.id && <label className="row"><input data-testid="bv-save" type="checkbox" checked={save} onChange={e => setSave(e.target.checked)} /> Сохранить в библиотеку блоков</label>}
       <div className="actions"><button onClick={onClose}>Отмена</button><button className="primary" data-testid="bv-insert" onClick={() => onInsert(vals, save)}>Вставить</button></div>

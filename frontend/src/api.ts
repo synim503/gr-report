@@ -1,4 +1,4 @@
-import { Block, DashboardInfo, DashboardSummary, SettingsView, Tpl } from './types'
+import { Block, DashboardInfo, DashboardSummary, JobView, SettingsView, Tpl } from './types'
 
 async function req<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, init)
@@ -13,7 +13,7 @@ const json = (method: string, body: unknown): RequestInit => ({ method, headers:
 
 export const api = {
   settings: () => req<SettingsView>('/api/settings'),
-  saveSettings: (b: { grafanaUrl?: string; token?: string; orgId?: number; imageScale?: number }) => req<SettingsView>('/api/settings', json('PUT', b)),
+  saveSettings: (b: { grafanaUrl?: string; token?: string; orgId?: number; imageScale?: number; parallelism?: number }) => req<SettingsView>('/api/settings', json('PUT', b)),
   test: (b: { grafanaUrl?: string; token?: string }) => req<{ ok: boolean; version?: string; org?: string; message: string }>('/api/grafana/test', json('POST', b)),
   dashboards: (q: string) => req<DashboardSummary[]>(`/api/grafana/dashboards?query=${encodeURIComponent(q)}`),
   dashboard: (uid: string) => req<DashboardInfo>(`/api/grafana/dashboards/${encodeURIComponent(uid)}`),
@@ -25,6 +25,18 @@ export const api = {
   blocks: () => req<Block[]>('/api/blocks'),
   saveBlock: (b: Block) => b.id ? req<Block>(`/api/blocks/${b.id}`, json('PUT', b)) : req<Block>('/api/blocks', json('POST', b)),
   deleteBlock: (id: string) => req<void>(`/api/blocks/${id}`, { method: 'DELETE' }),
+  startJob: (t: Tpl, overrides: Record<string, string> = {}) => {
+    const q = new URLSearchParams(); for (const [k, v] of Object.entries(overrides)) q.set(`var-${k}`, v)
+    return req<JobView>(`/api/reports/jobs?${q}`, json('POST', t))
+  },
+  jobs: () => req<JobView[]>('/api/reports/jobs'),
+  /** Cancels a running job; for a finished one removes it from the list. */
+  cancelJob: (id: string) => req<void>(`/api/reports/jobs/${id}`, { method: 'DELETE' }),
+  jobFile: async (id: string): Promise<GenerateResult> => {
+    const r = await fetch(`/api/reports/jobs/${id}/file`)
+    if (!r.ok) throw new Error(r.status === 409 ? 'Отчёт ещё не готов или задача не завершилась успешно' : `${r.status} ${r.statusText}`)
+    return parseDocx(r)
+  },
 }
 
 export function panelImageUrl(c: { dashboardUid: string; panelId: number; from: string; to: string; theme?: string; vars?: Record<string, string> },
@@ -47,6 +59,10 @@ export async function generate(t: Tpl, overrides: Record<string, string> = {}): 
     try { const b = await r.json(); if (b?.message) msg = b.message } catch { /* */ }
     throw new Error(msg)
   }
+  return parseDocx(r)
+}
+
+async function parseDocx(r: Response): Promise<GenerateResult> {
   const cd = r.headers.get('Content-Disposition') ?? ''
   const m = /filename\*=UTF-8''([^;]+)/.exec(cd)
   const warn = decodeURIComponent(r.headers.get('X-Report-Warnings') ?? '')

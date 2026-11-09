@@ -5,6 +5,8 @@ import { AlignMode, Rect, bounds } from '../lib/geometry'
 import { alignUnits, distributeUnits, groupMembers, groupVars, moveUnitTo, selectionUnits } from '../lib/blocks'
 import { Selection } from './PageView'
 import { Icon, IconName } from './Icon'
+import { VarField } from './VarField'
+import { useDashboard } from '../lib/useDashboard'
 
 interface Props {
   tpl: Tpl
@@ -95,18 +97,23 @@ export function Inspector({ tpl, sel, dispatch, snap, setSnap, onSaveBlock }: Pr
 function GroupVars({ els, page, dispatch, onSaveBlock }: { els: El[]; page: number; dispatch: (a: Action) => void; onSaveBlock: () => void }) {
   const vars = groupVars(els)
   const ids = els.map(e => e.id)
+  const dash = useDashboard(els.find(e => e.chart)?.chart?.dashboardUid)
   const [newName, setNewName] = useState('')
   const set = (name: string, value: string) => dispatch({ t: 'chartVars', page, ids, vars: { [name]: value } })
+  // dashboard variables are listed right away (with Grafana's values to pick from); custom ones follow
+  const known = dash?.variables ?? []
+  const names = [...known.map(v => v.name), ...Object.keys(vars).filter(k => !known.some(v => v.name === k))]
   return (
     <>
       <h3>Переменные блока</h3>
       <div className="muted" style={{ fontSize: 11 }}>Уходят в Grafana как var-имя для всех {els.length} графиков. <code>{'{{имя}}'}</code> — из переменных отчёта.</div>
-      {Object.entries(vars).map(([k, v]) => (
-        <div className="row" key={k}><label title={k}>{k}</label>
-          <input className="grow" data-testid={`gv-${k}`} value={v} onFocus={() => dispatch({ t: 'checkpoint' })} onChange={e => set(k, e.target.value)} /></div>
-      ))}
+      {names.map(k => {
+        const dv = known.find(v => v.name === k)
+        return <VarField key={k} name={k} label={dv?.label} testid={`gv-${k}`} options={dv?.options} value={vars[k] ?? dv?.defaultValue ?? ''}
+          onFocus={() => dispatch({ t: 'checkpoint' })} onChange={v => set(k, v)} />
+      })}
       <div className="row"><input className="grow" data-testid="gv-new-name" placeholder="новая переменная" value={newName} onChange={e => setNewName(e.target.value)} />
-        <button data-testid="gv-add" disabled={!/^[\w.-]+$/.test(newName) || newName in vars} onClick={() => { set(newName, ''); setNewName('') }}>+</button></div>
+        <button data-testid="gv-add" disabled={!/^[\w.-]+$/.test(newName) || names.includes(newName)} onClick={() => { set(newName, ''); setNewName('') }}>+</button></div>
       <div className="btnrow">
         <button data-testid="save-block" onClick={onSaveBlock}><Icon name="layers" /> Сохранить как блок…</button>
         <button data-testid="ungroup" onClick={() => dispatch({ t: 'ungroup', page, ids })}>Разгруппировать</button>
@@ -119,6 +126,9 @@ function ChartProps({ el, page, dispatch, tpl, compact }: { el: El; page: number
   const c = el.chart!
   const upd = (pt: Partial<NonNullable<El['chart']>>) => dispatch({ t: 'patch', page, ids: [el.id], patch: { chart: { ...c, ...pt } } })
   const [k, setK] = useState('')
+  const dash = useDashboard(c.dashboardUid)
+  const known = dash?.variables ?? []
+  const names = [...known.map(v => v.name), ...Object.keys(c.vars ?? {}).filter(x => !known.some(v => v.name === x))]
   return (
     <>
       <h3>График</h3>
@@ -130,12 +140,17 @@ function ChartProps({ el, page, dispatch, tpl, compact }: { el: El; page: number
       {!compact && (
         <>
           <h3>Переменные дашборда</h3>
-          {Object.entries(c.vars ?? {}).map(([name, v]) => (
-            <div className="kv" key={name}><input value={name} readOnly /><input data-testid={`cv-${name}`} value={v} onFocus={() => dispatch({ t: 'checkpoint' })} onChange={e => upd({ vars: { ...c.vars, [name]: e.target.value } })} />
-              <button onClick={() => { const { [name]: _x, ...rest } = c.vars ?? {}; dispatch({ t: 'checkpoint' }); upd({ vars: rest }) }}>✕</button></div>
-          ))}
-          <div className="row"><input className="grow" data-testid="cv-new" placeholder="имя переменной" value={k} onChange={e => setK(e.target.value)} />
-            <button data-testid="cv-add" disabled={!/^[\w.-]+$/.test(k)} onClick={() => { dispatch({ t: 'checkpoint' }); upd({ vars: { ...c.vars, [k]: '' } }); setK('') }}>+</button></div>
+          {names.map(name => {
+            const dv = known.find(v => v.name === name)
+            return (
+              <div key={name} className="kv1">
+                <VarField name={name} label={dv?.label} testid={`cv-${name}`} options={dv?.options} value={c.vars?.[name] ?? dv?.defaultValue ?? ''}
+                  onFocus={() => dispatch({ t: 'checkpoint' })} onChange={v => upd({ vars: { ...c.vars, [name]: v } })} />
+              </div>
+            )
+          })}
+          <div className="row"><input className="grow" data-testid="cv-new" placeholder="своя переменная" value={k} onChange={e => setK(e.target.value)} />
+            <button data-testid="cv-add" disabled={!/^[\w.-]+$/.test(k) || names.includes(k)} onClick={() => { dispatch({ t: 'checkpoint' }); upd({ vars: { ...c.vars, [k]: '' } }); setK('') }}>+</button></div>
         </>
       )}
     </>

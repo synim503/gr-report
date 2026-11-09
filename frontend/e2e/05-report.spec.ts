@@ -75,7 +75,7 @@ test('generate Word: layout, formatting, charts, image and 2 pages end up in the
   await expect(page.getByTestId('chart-img')).toHaveCount(2)
   await page.getByTestId('el-chart').nth(1).click({ position: { x: 5, y: 5 } })
   await page.getByTestId('chart-from').fill('now-1h'); await page.getByTestId('chart-theme').selectOption('dark')
-  await page.getByTestId('cv-new').fill('host'); await page.getByTestId('cv-add').click(); await page.getByTestId('cv-host').fill('web-77')
+  await page.getByTestId('cv-host').fill('web-77')            // dashboard variables are listed right away
   const c0 = await elRect(page.getByTestId('el-chart').first())
   await leave(page)
   await page.getByTestId('range-from').fill('now-7d')
@@ -94,7 +94,7 @@ test('generate Word: layout, formatting, charts, image and 2 pages end up in the
   await request.get('http://127.0.0.1:3100/__reset')
   const { zip, xml, filename } = await download(page, () => page.getByTestId('generate').click())
   expect(filename).toBe('Отчёт Q1.docx')
-  await expect(page.getByTestId('toast-info')).toContainText('Готово')
+  await expect(page.getByTestId('toast-info').filter({ hasText: 'Готово' })).toBeVisible()
 
   // text frames, absolutely positioned on the page (twips)
   const xs = attr(xml, 'w:framePr', 'w:x').map(Number), ys = attr(xml, 'w:framePr', 'w:y').map(Number)
@@ -120,7 +120,7 @@ test('generate Word: layout, formatting, charts, image and 2 pages end up in the
   // what Grafana was asked for: default range, override on one chart, theme, variables, pixel size = pt × 96/72 × 1.5
   const reqs = await grafanaRequests(request)
   const p1 = reqs.find(q => q.panelId === '1')!, p2r = reqs.find(q => q.panelId === '2')!
-  expect(p1.from).toBe('now-7d'); expect(p1.to).toBe('now'); expect(p1.theme).toBe('light'); expect(p1['var-host']).toBeUndefined()
+  expect(p1.from).toBe('now-7d'); expect(p1.to).toBe('now'); expect(p1.theme).toBe('light'); expect(p1['var-host']).toBe('srv-default')   // dashboard defaults picked up in the sidebar
   expect(p2r.from).toBe('now-1h'); expect(p2r.theme).toBe('dark'); expect(p2r['var-host']).toBe('web-77')
   expect(Number(p1.width)).toBe(Math.round(c0.w * 96 / 72 * 1.5)); expect(Number(p1.height)).toBe(Math.round(c0.h * 96 / 72 * 1.5))
 })
@@ -165,7 +165,7 @@ test('revoked token: generation reports it clearly instead of failing silently',
 test('generation of an empty report works and a failed request shows an error toast', async ({ page }) => {
   const { xml } = await download(page, () => page.getByTestId('generate').click())
   expect(xml).toContain('<w:body>')
-  await page.route('**/api/reports/generate*', r => r.fulfill({ status: 400, contentType: 'application/json', body: '{"message":"pages: must not be empty"}' }))
+  await page.route('**/api/reports/jobs*', r => r.request().method() === 'POST' ? r.fulfill({ status: 400, contentType: 'application/json', body: '{"message":"pages: must not be empty"}' }) : r.continue())
   await page.getByTestId('generate').click()
   await expect(page.getByTestId('toast-err')).toContainText('pages: must not be empty')
   await expect(page.getByTestId('generate')).toBeEnabled()

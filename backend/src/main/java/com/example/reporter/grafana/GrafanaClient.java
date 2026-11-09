@@ -23,7 +23,7 @@ public class GrafanaClient {
     public record ConnectionResult(boolean ok, String version, String org, String message) {}
     public record DashboardSummary(String uid, String title, String folder, List<String> tags) {}
     public record PanelInfo(int id, String title, String type, int gridX, int gridY, int gridW, int gridH) {}
-    public record Variable(String name, String label, String type, String defaultValue) {}
+    public record Variable(String name, String label, String type, String defaultValue, List<String> options) {}
     public record Dashboard(String uid, String title, String slug, List<PanelInfo> panels, List<Variable> variables) {}
 
     private final SettingsStore settings;
@@ -92,7 +92,13 @@ public class GrafanaClient {
             String def = cur.isArray() ? (cur.size() > 0 ? cur.get(0).asText("") : "") : cur.asText(v.path("query").asText(""));
             if (def.equals("$__all")) def = "All";
             String label = v.path("label").asText("");
-            vars.add(new Variable(v.path("name").asText(), label.isEmpty() ? v.path("name").asText() : label, type, def));
+            List<String> options = new ArrayList<>();
+            for (JsonNode o : v.path("options")) {
+                String val = o.path("value").asText(o.path("text").asText(""));
+                if (val.equals("$__all")) val = "All";
+                if (!val.isEmpty() && !options.contains(val) && options.size() < 200) options.add(val);
+            }
+            vars.add(new Variable(v.path("name").asText(), label.isEmpty() ? v.path("name").asText() : label, type, def, options));
         }
         return new Dashboard(uid, d.path("title").asText(uid), slug, panels, vars);
     }

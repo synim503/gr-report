@@ -13,6 +13,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /** In-process Grafana stand-in: enforces the bearer token and renders a PNG of the requested size. */
 public class FakeGrafana implements AutoCloseable {
@@ -20,6 +22,7 @@ public class FakeGrafana implements AutoCloseable {
     public final HttpServer server;
     public final List<String> requests = new CopyOnWriteArrayList<>();
     public final List<String> authHeaders = new CopyOnWriteArrayList<>();
+    public final AtomicInteger inflight = new AtomicInteger(), maxInflight = new AtomicInteger();
 
     public FakeGrafana() throws IOException { this(0); }
 
@@ -27,12 +30,15 @@ public class FakeGrafana implements AutoCloseable {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
         // e2e helpers: inspect / clear what the report generator asked Grafana for
         server.createContext("/__requests", ex -> json(ex, 200, "[" + String.join(",", requests.stream().map(r -> "\"" + r.replace("\"", "%22") + "\"").toList()) + "]"));
-        server.createContext("/__reset", ex -> { requests.clear(); json(ex, 200, "{}"); });
+        server.createContext("/__reset", ex -> { requests.clear(); maxInflight.set(0); json(ex, 200, "{}"); });
+        server.createContext("/__stats", ex -> json(ex, 200, "{\"maxInflight\":" + maxInflight.get() + ",\"inflight\":" + inflight.get() + "}"));
+        server.setExecutor(Executors.newCachedThreadPool());   // real Grafana serves requests concurrently
         server.createContext("/api/health", ex -> json(ex, 200, "{\"version\":\"10.4.0\",\"database\":\"ok\"}"));
         server.createContext("/api/org", ex -> { if (auth(ex)) json(ex, 200, "{\"id\":1,\"name\":\"Main Org.\"}"); });
         server.createContext("/api/search", ex -> {
             if (!auth(ex)) return;
             String q = Optional.ofNullable(ex.getRequestURI().getQuery()).orElse("");
+            if (q.contains("query=tall")) { json(ex, 200, "[{\"uid\":\"tall\",\"title\":\"Tall Dashboard\",\"tags\":[]}]"); return; }
             boolean filter = q.contains("query=cpu");
             json(ex, 200, filter
                 ? "[{\"uid\":\"abc\",\"title\":\"CPU Overview\",\"folderTitle\":\"Infra\",\"tags\":[\"linux\"]}]"
@@ -41,11 +47,18 @@ public class FakeGrafana implements AutoCloseable {
         server.createContext("/api/dashboards/uid/", ex -> {
             if (!auth(ex)) return;
             String uid = ex.getRequestURI().getPath().substring("/api/dashboards/uid/".length());
+            if (uid.equals("tall")) {            // 40 panels, 20 grid rows of 8 -> far taller than one page
+                StringBuilder ps = new StringBuilder();
+                for (int i = 0; i < 40; i++) ps.append(i > 0 ? "," : "").append("{\"id\":").append(i + 1).append(",\"title\":\"Panel ").append(i + 1)
+                    .append("\",\"type\":\"timeseries\",\"gridPos\":{\"x\":").append((i % 2) * 12).append(",\"y\":").append((i / 2) * 8).append(",\"w\":12,\"h\":8}}");
+                json(ex, 200, "{\"meta\":{\"url\":\"/d/tall/tall\"},\"dashboard\":{\"title\":\"Tall Dashboard\",\"templating\":{\"list\":[{\"name\":\"host\",\"type\":\"query\",\"current\":{\"value\":\"srv-default\"}}]},\"panels\":[" + ps + "]}}");
+                return;
+            }
             if (uid.equals("missing")) { json(ex, 404, "{\"message\":\"Dashboard not found\"}"); return; }
             json(ex, 200, "{\"meta\":{\"url\":\"/d/" + uid + "/cpu-overview\"},\"dashboard\":{\"title\":\"CPU Overview\"," +
-                "\"templating\":{\"list\":[{\"name\":\"host\",\"label\":\"Host\",\"type\":\"query\",\"current\":{\"value\":\"srv-default\"}}," +
+                "\"templating\":{\"list\":[{\"name\":\"host\",\"label\":\"Host\",\"type\":\"query\",\"current\":{\"value\":\"srv-default\"},\"options\":[{\"value\":\"srv-default\"},{\"value\":\"web-01\"},{\"value\":\"db-02\"}]}," +
                 "{\"name\":\"ds\",\"type\":\"datasource\",\"current\":{\"value\":\"prom\"}}," +
-                "{\"name\":\"job\",\"type\":\"custom\",\"current\":{\"value\":[\"$__all\"]}}]},\"panels\":[" +
+                "{\"name\":\"job\",\"type\":\"custom\",\"current\":{\"value\":[\"$__all\"]},\"options\":[{\"value\":\"$__all\"},{\"value\":\"node\"},{\"value\":\"app\"}]}]},\"panels\":[" +
                 "{\"id\":1,\"title\":\"CPU usage\",\"type\":\"timeseries\",\"gridPos\":{\"x\":0,\"y\":0,\"w\":12,\"h\":8}}," +
                 "{\"id\":2,\"title\":\"Memory\",\"type\":\"gauge\",\"gridPos\":{\"x\":12,\"y\":0,\"w\":6,\"h\":6}}," +
                 "{\"type\":\"row\",\"title\":\"Collapsed\",\"panels\":[{\"id\":3,\"title\":\"Disk\",\"type\":\"bargauge\",\"gridPos\":{\"x\":0,\"y\":8,\"w\":12,\"h\":8}}]}]}}");
@@ -56,11 +69,22 @@ public class FakeGrafana implements AutoCloseable {
             String path = ex.getRequestURI().getPath();
             if (path.contains("/norender/")) { bytes(ex, 200, "text/html", "<html>login</html>".getBytes(StandardCharsets.UTF_8)); return; }
             if (path.contains("/boom/")) { json(ex, 500, "{\"message\":\"boom\"}"); return; }
+            int now = inflight.incrementAndGet();
+            maxInflight.accumulateAndGet(now, Math::max);
+            try {
+                if (path.contains("/slow/")) { try { Thread.sleep(700); } catch (InterruptedException ignored) { } }   // slow renderer
+                renderOk(ex);
+            } finally { inflight.decrementAndGet(); }
+        });
+        server.start();
+    }
+
+    private void renderOk(HttpExchange ex) throws IOException {
+        {
             Map<String, String> q = query(ex.getRequestURI().getRawQuery());
             int w = Integer.parseInt(q.getOrDefault("width", "100")), h = Integer.parseInt(q.getOrDefault("height", "100"));
             bytes(ex, 200, "image/png", png(w, h, "panel " + q.get("panelId")));
-        });
-        server.start();
+        }
     }
 
     public String url() { return "http://127.0.0.1:" + server.getAddress().getPort(); }

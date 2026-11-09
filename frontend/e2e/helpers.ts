@@ -12,8 +12,24 @@ export async function reset(request: APIRequestContext) {
   await request.put(`${API}/api/settings`, { data: { grafanaUrl: GRAFANA, token: TOKEN, orgId: 1, imageScale: 1.5 } })
   for (const t of await (await request.get(`${API}/api/templates`)).json()) await request.delete(`${API}/api/templates/${t.id}`)
   for (const b of await (await request.get(`${API}/api/blocks`)).json()) await request.delete(`${API}/api/blocks/${b.id}`)
+  for (const j of await (await request.get(`${API}/api/reports/jobs`)).json()) await request.delete(`${API}/api/reports/jobs/${j.id}`)   // cancel / remove
+  await request.put(`${API}/api/settings`, { data: { parallelism: 4 } })
   await request.get(`${GRAFANA}/__reset`)
 }
+
+/** Saves a template with `n` slow charts (700 ms each in the fake Grafana) and returns its name. */
+export async function slowTemplate(request: APIRequestContext, n: number, name = 'Slow report') {
+  const els = Array.from({ length: n }, (_, i) => ({ id: `c${i}`, type: 'chart', x: 20, y: 20 + i * 60, w: 200, h: 50, z: i, chart: { dashboardUid: 'slow', panelId: i + 1, title: `Slow ${i + 1}`, vars: {} } }))
+  await request.post(`${API}/api/templates`, { data: { name, pageWidth: 595.28, pageHeight: 841.89, timeRange: { from: 'now-6h', to: 'now' }, variables: {}, pages: [{ elements: els }] } })
+  return name
+}
+
+export async function openFirstTemplate(page: Page) {
+  await page.getByTestId('open').click(); await page.getByTestId('template-open').first().click()
+  await expect(page.getByTestId('templates-dialog')).toBeHidden()
+}
+
+export const maxInflight = async (request: APIRequestContext): Promise<number> => (await (await request.get(`${GRAFANA}/__stats`)).json()).maxInflight
 
 export async function grafanaRequests(request: APIRequestContext): Promise<Record<string, string>[]> {
   const list: string[] = await (await request.get(`${GRAFANA}/__requests`)).json()

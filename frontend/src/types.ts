@@ -49,7 +49,7 @@ export const PAGE_SIZES: Record<string, { w: number; h: number }> = {
   Letter: { w: 612, h: 792 },
 }
 
-export interface BlockVar { name: string; label?: string; defaultValue: string }
+export interface BlockVar { name: string; label?: string; defaultValue: string; options?: string[] }
 export interface BlockChart { panelId: number; title?: string; x: number; y: number; w: number; h: number }
 export interface Block {
   id?: string
@@ -63,5 +63,8 @@ export interface Block {
 }
 export interface DashboardSummary { uid: string; title: string; folder?: string; tags: string[] }
 export interface PanelInfo { id: number; title: string; type: string; gridX: number; gridY: number; gridW: number; gridH: number }
-export interface DashboardInfo { uid: string; title: string; slug: string; panels: PanelInfo[]; variables: { name: string; label: string; type: string; defaultValue: string }[] }
-export interface SettingsView { grafanaUrl: string; tokenSet: boolean; tokenHint: string; orgId: number; imageScale: number }
+export interface DashboardInfo { uid: string; title: string; slug: string; panels: PanelInfo[]; variables: DashVar[] }
+export interface DashVar { name: string; label: string; type: string; defaultValue: string; options: string[] }
+export interface SettingsView { grafanaUrl: string; tokenSet: boolean; tokenHint: string; orgId: number; imageScale: number; parallelism: number }
+export type JobState = 'RUNNING' | 'DONE' | 'FAILED' | 'CANCELLED'
+export interface JobView { id: string; name: string; state: JobState; done: number; total: number; startedAt: number; finishedAt?: number; error?: string; warnings: string[]; sizeBytes?: number }

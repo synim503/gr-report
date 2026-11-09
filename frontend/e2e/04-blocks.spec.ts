@@ -37,8 +37,8 @@ test('whole dashboard becomes a block: all panels, dashboard layout, variables w
   await expect(charts).toHaveCount(3)
   const r = await Promise.all([0, 1, 2].map(i => elRect(charts.nth(i))))
   // layout mirrors the dashboard grid: panel 2 is half a page-width to the right, panel 3 is one grid block (8 rows) lower
-  near(r[1].x - r[0].x, 12 / 24 * 515, 0.5); near(r[1].y, r[0].y, 0.1); near(r[2].y - r[0].y, 8 * (515 / 24) * 0.76, 0.5)
-  near(r[0].w, 257.5, 0.5)
+  near(r[1].x - r[0].x, 12 / 24 * 523, 0.5); near(r[1].y, r[0].y, 0.1); near(r[2].y - r[0].y, 8 * (523 / 24) * 0.76, 0.5)
+  near(r[0].w, 261.5, 0.5)
   const groups = await charts.evaluateAll(n => n.map(e => e.getAttribute('data-group')))
   expect(new Set(groups).size).toBe(1); expect(groups[0]).toBeTruthy()
 
@@ -126,7 +126,7 @@ test('selected charts can be saved as a block; mixed or empty selections are rej
   const blocks = await (await request.get(`${API}/api/blocks`)).json()
   const b = blocks.find((x: any) => x.name === 'CPU + Memory')
   expect(b.charts).toHaveLength(2); expect(b.dashboardUid).toBe('abc')
-  near(b.charts[1].x, 257.5, 0.6); expect(b.charts[0].x).toBe(0); expect(b.charts[0].y).toBe(0)
+  near(b.charts[1].x, 261.5, 0.6); expect(b.charts[0].x).toBe(0); expect(b.charts[0].y).toBe(0)
   expect(b.variables.map((v: any) => [v.name, v.defaultValue])).toEqual([['host', 'web-01'], ['job', 'All']])   // current values become defaults
 
   // a single ungrouped chart exposes per-chart variables

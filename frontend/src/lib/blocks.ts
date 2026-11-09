@@ -2,19 +2,47 @@ import { Block, El } from '../types'
 import { makeEl, newId } from './model'
 import { AlignMode, Rect, align, bounds, distribute } from './geometry'
 
-/** Places a block's charts on a page at (ox, oy), scaling down if it would not fit. Variables go to every chart. */
-export function instantiateBlock(b: Block, values: Record<string, string>, ox: number, oy: number, page: { w: number; h: number }): El[] {
-  const scale = Math.min(1, page.w / b.width, page.h / b.height)
-  const bw = b.width * scale, bh = b.height * scale
-  const x0 = Math.max(0, Math.min(ox, page.w - bw)), y0 = Math.max(0, Math.min(oy, page.h - bh))
-  const group = { id: newId(), presetId: b.id, name: b.name }
+const PAGE_MARGIN = 36
+
+/**
+ * Places a block on the page at (ox, oy). The block is only ever scaled down to fit the page WIDTH.
+ * A block that is taller than a page (typical for a whole dashboard) is split across several pages,
+ * row by row, keeping the dashboard's layout. Returns the elements of every page the block needs.
+ */
+export function instantiateBlockPages(b: Block, values: Record<string, string>, ox: number, oy: number, page: { w: number; h: number }): El[][] {
+  const scale = Math.min(1, (page.w - 2 * PAGE_MARGIN) / b.width)
+  const bw = b.width * scale
+  const x0 = Math.max(0, Math.min(ox, page.w - bw))
   const vars: Record<string, string> = {}
   for (const v of b.variables) vars[v.name] = values[v.name] ?? v.defaultValue
-  return b.charts.map(c => makeEl('chart', round(x0 + c.x * scale), round(y0 + c.y * scale), {
-    w: round(c.w * scale), h: round(c.h * scale), group,
-    chart: { dashboardUid: b.dashboardUid, panelId: c.panelId, title: c.title, vars: { ...vars } },
-  }))
+  const charts = [...b.charts].sort((p, q) => p.y - q.y || p.x - q.x).map(c => ({ ...c, x: c.x * scale, y: c.y * scale, w: c.w * scale, h: c.h * scale }))
+  const totalH = Math.max(...charts.map(c => c.y + c.h))
+  const avail = page.h - 2 * PAGE_MARGIN
+
+  // pages: [{ base (block-y where the page starts), top (page-y where it is placed), charts }]
+  const chunks: { base: number; top: number; charts: typeof charts }[] = []
+  if (totalH <= avail) {
+    chunks.push({ base: 0, top: Math.max(0, Math.min(oy, page.h - totalH)), charts })
+  } else {
+    let cur = { base: 0, top: PAGE_MARGIN, charts: [] as typeof charts }
+    for (const c of charts) {
+      if (c.y - cur.base + c.h > avail && cur.charts.length) { chunks.push(cur); cur = { base: c.y, top: PAGE_MARGIN, charts: [] } }
+      cur.charts.push(c)
+    }
+    chunks.push(cur)
+  }
+  return chunks.map(ch => {
+    const group = { id: newId(), presetId: b.id, name: b.name }
+    return ch.charts.map(c => makeEl('chart', round(x0 + c.x), round(ch.top + c.y - ch.base), {
+      w: round(Math.min(c.w, page.w)), h: round(Math.min(c.h, page.h)), group,
+      chart: { dashboardUid: b.dashboardUid, panelId: c.panelId, title: c.title, vars: { ...vars } },
+    }))
+  })
 }
+
+/** Elements of the first page only (blocks that fit on one page). */
+export const instantiateBlock = (b: Block, values: Record<string, string>, ox: number, oy: number, page: { w: number; h: number }): El[] =>
+  instantiateBlockPages(b, values, ox, oy, page)[0]
 
 const round = (v: number) => Math.round(v * 10) / 10
 

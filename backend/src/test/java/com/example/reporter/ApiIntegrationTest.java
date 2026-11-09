@@ -277,4 +277,115 @@ class ApiIntegrationTest {
         assertEquals("h1", back.pages.get(0).elements.get(1).chart.vars.get("host"));
         assertEquals("v", back.variables.get("k"));
     }
+
+    // ---------- parallelism & asynchronous jobs ----------
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> awaitJob(String id, long timeoutMs) throws Exception {
+        long end = System.currentTimeMillis() + timeoutMs;
+        while (System.currentTimeMillis() < end) {
+            var j = (Map<String, Object>) rest.getForObject("/api/reports/jobs/" + id, Map.class);
+            if (!"RUNNING".equals(j.get("state"))) return j;
+            Thread.sleep(40);
+        }
+        throw new AssertionError("job still running after " + timeoutMs + " ms");
+    }
+    @SuppressWarnings("unchecked")
+    private String startJob(Template t, String query) {
+        var r = rest.postForEntity("/api/reports/jobs" + query, t, Map.class);
+        assertEquals(HttpStatus.ACCEPTED, r.getStatusCode());
+        return (String) r.getBody().get("id");
+    }
+    private Template slowTemplate(int charts) {
+        Template.Element[] els = new Template.Element[charts];
+        for (int i = 0; i < charts; i++) els[i] = chart("slow", i + 1, 10, 10 + i * 20, 100, 50);
+        return template(els);
+    }
+    private void parallelism(int n) { rest.put("/api/settings", Map.of("parallelism", n)); }
+
+    @Test @Order(22) void parallelismSettingIsValidatedAndPersisted() throws Exception {
+        configure();
+        assertEquals(4, map(rest.getForEntity("/api/settings", Map.class)).get("parallelism"), "default");
+        var h = new HttpHeaders(); h.setContentType(MediaType.APPLICATION_JSON);
+        for (String bad : new String[]{"0", "17", "-3"})
+            assertEquals(HttpStatus.BAD_REQUEST, rest.exchange("/api/settings", HttpMethod.PUT, new HttpEntity<>("{\"parallelism\":" + bad + "}", h), Map.class).getStatusCode(), bad);
+        parallelism(3);
+        assertEquals(3, map(rest.getForEntity("/api/settings", Map.class)).get("parallelism"));
+        assertTrue(Files.readString(dataDir.resolve("settings.json")).contains("\"parallelism\":3"));
+        assertEquals(FakeGrafana.TOKEN.length() > 0, Files.readString(dataDir.resolve("settings.json")).contains(FakeGrafana.TOKEN), "token kept when only parallelism changes");
+    }
+
+    @Test @Order(23) void jobLifecycleStartPollDownloadRemove() throws Exception {
+        configure(); parallelism(4);
+        var t = template(chart("abc", 1, 10, 10, 200, 100), chart("abc", 2, 10, 120, 200, 100), chart("abc", 3, 10, 230, 200, 100)); t.name = "Job report";
+        String id = startJob(t, "");
+        var done = awaitJob(id, 10_000);
+        assertEquals("DONE", done.get("state")); assertEquals(3, done.get("done")); assertEquals(3, done.get("total"));
+        assertNotNull(done.get("finishedAt")); assertTrue((Integer) done.get("sizeBytes") > 1000);
+        var file = rest.getForEntity("/api/reports/jobs/" + id + "/file", byte[].class);
+        assertEquals(HttpStatus.OK, file.getStatusCode());
+        assertEquals(3, new XWPFDocument(new ByteArrayInputStream(file.getBody())).getAllPictures().size());
+        assertTrue(URLDecoder.decode(file.getHeaders().getContentDisposition().toString(), StandardCharsets.UTF_8).contains("Job report.docx"));
+        assertTrue(rest.getForObject("/api/reports/jobs", List.class).stream().anyMatch(o -> ((Map<?, ?>) o).get("id").equals(id)));
+        rest.delete("/api/reports/jobs/" + id);                                   // finished job: removed from the list
+        assertEquals(HttpStatus.NOT_FOUND, rest.getForEntity("/api/reports/jobs/" + id, Map.class).getStatusCode());
+        assertEquals(HttpStatus.NOT_FOUND, rest.exchange("/api/reports/jobs/" + id, HttpMethod.DELETE, null, Void.class).getStatusCode());
+    }
+
+    @Test @Order(24) void parallelismLimitsConcurrentRendersPerReport() throws Exception {
+        configure();
+        for (int n : new int[]{1, 2, 6}) {
+            parallelism(n); grafana.maxInflight.set(0);
+            long t0 = System.currentTimeMillis();
+            var j = awaitJob(startJob(slowTemplate(6), ""), 30_000);
+            long took = System.currentTimeMillis() - t0;
+            assertEquals("DONE", j.get("state"));
+            assertEquals(n, grafana.maxInflight.get(), "max concurrent renders with parallelism=" + n);
+            // 6 slow (700 ms) charts: sequential ≈ 4.2 s, 2 at a time ≈ 2.1 s, all at once ≈ 0.7 s
+            if (n == 1) assertTrue(took >= 4000, "took " + took);
+            if (n == 6) assertTrue(took < 2500, "took " + took);
+        }
+    }
+
+    @Test @Order(25) void runningJobCanBeCancelledAndStopsRenderingCharts() throws Exception {
+        configure(); parallelism(1); grafana.requests.clear();
+        String id = startJob(slowTemplate(8), "");                              // ≈ 5.6 s when run to the end
+        Thread.sleep(900);
+        assertEquals("RUNNING", map(rest.getForEntity("/api/reports/jobs/" + id, Map.class)).get("state"));
+        long t0 = System.currentTimeMillis();
+        rest.delete("/api/reports/jobs/" + id);
+        var j = awaitJob(id, 3000);
+        assertEquals("CANCELLED", j.get("state")); assertTrue(System.currentTimeMillis() - t0 < 1500, "cancel must be prompt");
+        assertEquals(HttpStatus.CONFLICT, rest.getForEntity("/api/reports/jobs/" + id + "/file", byte[].class).getStatusCode());
+        int sent = grafana.requests.size();
+        Thread.sleep(1800);
+        assertEquals(sent, grafana.requests.size(), "no further requests after cancellation");
+        assertTrue(sent < 8, "only " + sent + " of 8 charts were requested");
+        rest.delete("/api/reports/jobs/" + id);                                   // second delete removes the cancelled entry
+        assertEquals(HttpStatus.NOT_FOUND, rest.getForEntity("/api/reports/jobs/" + id, Map.class).getStatusCode());
+        parallelism(4);
+    }
+
+    @Test @Order(26) void failedJobsReportTheErrorAndWarningsArePreserved() throws Exception {
+        configure(); parallelism(4);
+        var t = template(chart("boom", 1, 10, 10, 200, 100), chart("abc", 1, 10, 120, 200, 100));
+        var strict = awaitJob(startJob(t, "?strict=true"), 10_000);
+        assertEquals("FAILED", strict.get("state")); assertTrue(strict.get("error").toString().contains("HTTP 500"), String.valueOf(strict.get("error")));
+        assertEquals(HttpStatus.CONFLICT, rest.getForEntity("/api/reports/jobs/" + strict.get("id") + "/file", byte[].class).getStatusCode());
+        var lenient = awaitJob(startJob(t, ""), 10_000);
+        assertEquals("DONE", lenient.get("state"));
+        assertTrue(lenient.get("warnings").toString().contains("P1"));
+        var x = rest.getForEntity("/api/reports/jobs/" + lenient.get("id") + "/file", byte[].class);
+        assertTrue(URLDecoder.decode(x.getHeaders().getFirst("X-Report-Warnings"), StandardCharsets.UTF_8).contains("P1"));
+    }
+
+    @Test @Order(27) void invalidJobRequestsAreRejectedAndJobVariablesApply() throws Exception {
+        configure(); parallelism(4);
+        Template bad = template(); bad.pages.clear();
+        assertEquals(HttpStatus.BAD_REQUEST, rest.postForEntity("/api/reports/jobs", bad, Map.class).getStatusCode());
+        var t = blockTemplate("{{server}}"); grafana.requests.clear();
+        awaitJob(startJob(t, "?var-server=job-host"), 10_000);
+        assertTrue(grafana.requests.stream().allMatch(q -> FakeGrafana.query(q.substring(q.indexOf('?') + 1)).get("var-host").equals("job-host")));
+        assertEquals(HttpStatus.NOT_FOUND, rest.getForEntity("/api/reports/jobs/nope", Map.class).getStatusCode());
+    }
 }

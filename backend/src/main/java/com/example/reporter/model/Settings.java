@@ -10,4 +10,6 @@ public class Settings {
     public int orgId = 1;
     /** Multiplier of pixel density for rendered panel images. */
     public double imageScale = 1.5;
+    /** How many charts of one report are rendered by Grafana at the same time (1..16). */
+    public int parallelism = 4;
 }

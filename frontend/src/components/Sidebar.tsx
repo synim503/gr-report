@@ -3,6 +3,8 @@ import { api } from '../api'
 import { Block, DashboardInfo, DashboardSummary, SettingsView } from '../types'
 import { DND_MIME, DropPayload } from './PageView'
 import { Icon } from './Icon'
+import { VarField } from './VarField'
+import { loadDashboard } from '../lib/useDashboard'
 
 interface Props {
   settings: SettingsView | null
@@ -10,7 +12,8 @@ interface Props {
   onSettings: () => void
   onAddText: () => void
   onAddImage: (file: File) => void
-  onAddPanel: (chart: { dashboardUid: string; panelId: number; title?: string }, w: number, h: number) => void
+  blockWidth: number
+  onAddPanel: (chart: { dashboardUid: string; panelId: number; title?: string }, w: number, h: number, vars: Record<string, string>) => void
   onUseBlock: (b: Block) => void
   onDeleteBlock: (id: string) => void
   onError: (msg: string) => void
@@ -28,6 +31,7 @@ export function Sidebar(p: Props) {
   const [error, setError] = useState<string | null>(null)
   const [open, setOpen] = useState<string | null>(null)
   const [details, setDetails] = useState<Record<string, DashboardInfo>>({})
+  const [varVals, setVarVals] = useState<Record<string, Record<string, string>>>({})
   const fileRef = useRef<HTMLInputElement>(null)
   const configured = !!p.settings?.grafanaUrl && p.settings.tokenSet
 
@@ -41,11 +45,19 @@ export function Sidebar(p: Props) {
     if (open === uid) { setOpen(null); return }
     setOpen(uid)
     if (!details[uid]) {
-      try { const d = await api.dashboard(uid); setDetails(s => ({ ...s, [uid]: d })) } catch (e) { p.onError((e as Error).message) }
+      try {
+        const d = await loadDashboard(uid)
+        setDetails(s => ({ ...s, [uid]: d }))
+        setVarVals(v => ({ ...v, [uid]: Object.fromEntries(d.variables.map(x => [x.name, x.defaultValue])) }))
+      } catch (e) { p.onError((e as Error).message) }
     }
   }
   async function wholeDashboard(uid: string) {
-    try { p.onUseBlock(await api.dashboardBlock(uid, 515)) } catch (e) { p.onError((e as Error).message) }
+    try {
+      const b = await api.dashboardBlock(uid, p.blockWidth)
+      for (const v of b.variables) v.defaultValue = varVals[uid]?.[v.name] ?? v.defaultValue      // values picked in the sidebar
+      p.onUseBlock(b)
+    } catch (e) { p.onError((e as Error).message) }
   }
 
   return (
@@ -77,11 +89,21 @@ export function Sidebar(p: Props) {
             <div style={{ paddingLeft: 8 }}>
               <button data-testid="dash-as-block" style={{ width: '100%', marginBottom: 4 }} onClick={() => wholeDashboard(d.uid)}><Icon name="layers" /> Весь дашборд как блок…</button>
               {!details[d.uid] && <div className="muted" style={{ padding: 6 }}>Загрузка…</div>}
+              {details[d.uid] && details[d.uid].variables.length > 0 && (
+                <div className="vars-card" data-testid="dash-vars">
+                  <div className="cap"><Icon name="braces" size={13} /> Переменные дашборда</div>
+                  {details[d.uid].variables.map(v => (
+                    <VarField key={v.name} name={v.name} label={v.label} testid={`sv-${v.name}`} options={v.options} value={varVals[d.uid]?.[v.name] ?? ''}
+                      onChange={x => setVarVals(s => ({ ...s, [d.uid]: { ...s[d.uid], [v.name]: x } }))} />
+                  ))}
+                  <div className="muted" style={{ fontSize: 11 }}>Попадут в добавляемые графики и блок</div>
+                </div>
+              )}
               {details[d.uid]?.panels.map(pn => {
                 const { w, h } = panelSize(pn.gridW, pn.gridH)
                 const chart = { dashboardUid: d.uid, panelId: pn.id, title: pn.title }
                 return (
-                  <div className="chip" key={pn.id} draggable data-testid="panel-item" onDragStart={drag({ kind: 'panel', chart, w, h })} onClick={() => p.onAddPanel(chart, w, h)}>
+                  <div className="chip" key={pn.id} draggable data-testid="panel-item" onDragStart={drag({ kind: 'panel', chart, w, h, vars: varVals[d.uid] ?? {} })} onClick={() => p.onAddPanel(chart, w, h, varVals[d.uid] ?? {})}>
                     <span className="ico"><Icon name="chart" size={15} /></span><span className="grow">{pn.title || `Панель ${pn.id}`}</span><small>{pn.type}</small>
                   </div>
                 )

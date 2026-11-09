@@ -19,8 +19,8 @@ public class Block {
     /** Bounding size of the layout in points. */
     @DecimalMin("1") @DecimalMax("5000") public double width = 515;
     @DecimalMin("1") @DecimalMax("5000") public double height = 300;
-    @Size(max = 50) @Valid public List<Variable> variables = new ArrayList<>();
-    @NotEmpty @Size(max = 50) @Valid public List<BlockChart> charts = new ArrayList<>();
+    @Size(max = 100) @Valid public List<Variable> variables = new ArrayList<>();
+    @NotEmpty @Size(max = 300) @Valid public List<BlockChart> charts = new ArrayList<>();
     public String updatedAt;
 
     @JsonIgnoreProperties(ignoreUnknown = true)
@@ -28,6 +28,8 @@ public class Block {
         @NotBlank @Pattern(regexp = "^[A-Za-z0-9_\\-.]{1,64}$", message = "invalid variable name") public String name;
         @Size(max = 200) public String label;
         @Size(max = 500) public String defaultValue = "";
+        /** Known values (from the Grafana dashboard) offered as suggestions in the UI. */
+        @Size(max = 200) public List<@Size(max = 500) String> options = new ArrayList<>();
     }
 
     /** Chart position relative to the block's top-left corner (points). */

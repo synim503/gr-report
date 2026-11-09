@@ -32,12 +32,13 @@ public class SettingsStore {
 
     public Settings get() { return current; }
 
-    public synchronized Settings update(String url, String token, Integer orgId, Double imageScale) {
+    public synchronized Settings update(String url, String token, Integer orgId, Double imageScale, Integer parallelism) {
         Settings s = new Settings();
         s.grafanaUrl = url != null ? normalize(url) : current.grafanaUrl;
         s.token = token != null ? token : current.token;   // null = keep, "" = clear
         s.orgId = orgId != null ? orgId : current.orgId;
         s.imageScale = imageScale != null ? imageScale : current.imageScale;
+        s.parallelism = parallelism != null ? parallelism : current.parallelism;
         try {
             Path tmp = Files.createTempFile(file.getParent(), "settings", ".tmp");
             try { Files.setPosixFilePermissions(tmp, PosixFilePermissions.fromString("rw-------")); } catch (UnsupportedOperationException ignored) {}

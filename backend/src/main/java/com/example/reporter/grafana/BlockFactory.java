@@ -30,6 +30,7 @@ public final class BlockFactory {
         for (GrafanaClient.Variable v : d.variables()) {
             Block.Variable bv = new Block.Variable();
             bv.name = v.name(); bv.label = v.label(); bv.defaultValue = v.defaultValue() == null ? "" : v.defaultValue();
+            bv.options = new java.util.ArrayList<>(v.options());
             b.variables.add(bv);
         }
         return b;

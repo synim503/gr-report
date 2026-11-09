@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import type { Editor } from '@tiptap/react'
-import { api, generate } from './api'
-import { Block, El, SettingsView, Tpl } from './types'
+import { api } from './api'
+import { Block, El, JobView, SettingsView, Tpl } from './types'
 import { emptyTpl, makeEl, chartEl, reducer, State } from './lib/model'
-import { blockFromElements, instantiateBlock } from './lib/blocks'
+import { blockFromElements, instantiateBlockPages } from './lib/blocks'
 import { DropPayload, PageView, Selection } from './components/PageView'
 import { TextToolbar } from './components/TextToolbar'
 import { Sidebar } from './components/Sidebar'
@@ -11,6 +11,8 @@ import { Inspector } from './components/Inspector'
 import { InsertBlockDialog, SaveBlockDialog, SettingsDialog, TemplatesDialog } from './components/Dialogs'
 import { Icon, Logo } from './components/Icon'
 import { Onboarding } from './components/Onboarding'
+import { JobsPanel } from './components/JobsPanel'
+import { loadDashboard } from './lib/useDashboard'
 
 interface Toast { id: number; kind: 'info' | 'err' | 'warn'; text: string }
 interface Pending { block: Block; page: number; x: number; y: number }
@@ -31,7 +33,10 @@ export default function App() {
   const [pending, setPending] = useState<Pending | null>(null)
   const [templates, setTemplates] = useState<{ id: string; name: string; updatedAt?: string }[]>([])
   const [toasts, setToasts] = useState<Toast[]>([])
-  const [busy, setBusy] = useState(false)
+  const [jobs, setJobs] = useState<JobView[]>([])
+  const [jobsOpen, setJobsOpen] = useState(false)
+  const mine = useRef(new Set<string>())      // jobs started from this tab: downloaded automatically when done
+  const handled = useRef(new Set<string>())
   const [refreshKey, setRefreshKey] = useState(0)
   const toastId = useRef(0)
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
@@ -73,10 +78,10 @@ export default function App() {
     const s = nextSpot(page)
     addEl(page, makeEl('text', Math.min(x ?? s.x, tpl.pageWidth - 240), Math.min(y ?? s.y, tpl.pageHeight - 60), { w: 240, h: 60 }))
   }
-  const addPanel = (chart: { dashboardUid: string; panelId: number; title?: string }, w: number, h: number, page = curPage, x?: number, y?: number) => {
+  const addPanel = (chart: { dashboardUid: string; panelId: number; title?: string }, w: number, h: number, page = curPage, x?: number, y?: number, vars: Record<string, string> = {}) => {
     const s = nextSpot(page)
     const cw = Math.min(w, tpl.pageWidth), ch = Math.min(h, tpl.pageHeight)
-    addEl(page, chartEl(Math.max(0, Math.min(x ?? s.x, tpl.pageWidth - cw)), Math.max(0, Math.min(y ?? s.y, tpl.pageHeight - ch)), { ...chart, vars: {} }, cw, ch))
+    addEl(page, chartEl(Math.max(0, Math.min(x ?? s.x, tpl.pageWidth - cw)), Math.max(0, Math.min(y ?? s.y, tpl.pageHeight - ch)), { ...chart, vars: { ...vars } }, cw, ch))
   }
   const addImage = (file: File, page = curPage, x?: number, y?: number) => {
     if (!/^image\/(png|jpe?g|gif)$/.test(file.type)) { fail('Поддерживаются PNG, JPEG и GIF'); return }
@@ -97,7 +102,7 @@ export default function App() {
   }
   const onDrop = (page: number, x: number, y: number, pl: DropPayload) => {
     if (pl.kind === 'text') addText(page, x, y)
-    else if (pl.kind === 'panel') addPanel(pl.chart, pl.w, pl.h, page, x, y)
+    else if (pl.kind === 'panel') addPanel(pl.chart, pl.w, pl.h, page, x, y, pl.vars)
     else { const b = blocks.find(b => b.id === pl.blockId); if (b) setPending({ block: b, page, x, y }) }
   }
   const useBlock = (b: Block) => { const s = nextSpot(curPage); setPending({ block: b, page: curPage, x: s.x, y: s.y }) }
@@ -107,9 +112,15 @@ export default function App() {
     let b = pending.block
     try {
       if (save && !b.id) { b = await api.saveBlock(b); setBlocks(await api.blocks()) }
-      const els = instantiateBlock(b, values, pending.x, pending.y, pageSize)
-      dispatch({ t: 'addMany', page: pending.page, els })
-      setSel({ page: pending.page, ids: els.map(e => e.id) })
+      const chunks = instantiateBlockPages(b, values, pending.x, pending.y, pageSize)
+      // a block taller than one page continues on the following pages (new pages are appended when needed)
+      let pageCount = tpl.pages.length
+      for (let i = 0; i < chunks.length; i++) {
+        const pageIdx = pending.page + i
+        if (pageIdx >= pageCount) { dispatch({ t: 'addPage' }); pageCount++ }
+        dispatch({ t: 'addMany', page: pageIdx, els: chunks[i] })
+      }
+      setSel({ page: pending.page, ids: chunks[0].map(e => e.id) })
       setPending(null)
     } catch (e) { fail((e as Error).message) }
   }
@@ -117,7 +128,13 @@ export default function App() {
   async function saveBlock(name: string) {
     const { block, error } = blockFromElements(selEls, name)
     if (!block) { fail(error ?? 'Не удалось создать блок'); return }
-    try { await api.saveBlock(block); setBlocks(await api.blocks()); setDialog(null); toast(`Блок «${name}» сохранён`) } catch (e) { fail((e as Error).message) }
+    try {
+      // offer the dashboard's known values as suggestions in the library block too (best effort)
+      try {
+        const d = await loadDashboard(block.dashboardUid)
+        for (const v of block.variables) v.options = d.variables.find(x => x.name === v.name)?.options ?? []
+      } catch { /* Grafana unreachable: keep the block without suggestions */ }
+      await api.saveBlock(block); setBlocks(await api.blocks()); setDialog(null); toast(`Блок «${name}» сохранён`) } catch (e) { fail((e as Error).message) }
   }
 
   // ---------- template persistence / generation ----------
@@ -132,17 +149,54 @@ export default function App() {
       dispatch({ t: 'load', tpl: t }); setSel({ page: 0, ids: [] }); setEditingId(null); setDialog(null)
     } catch (e) { fail((e as Error).message) }
   }
-  async function run() {
-    setBusy(true)
+  function saveBlob(blob: Blob, filename: string) {
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a'); a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 5000)
+  }
+  async function downloadJob(id: string) {
     try {
-      const r = await generate(tpl)
-      const url = URL.createObjectURL(r.blob)
-      const a = document.createElement('a'); a.href = url; a.download = r.filename; document.body.appendChild(a); a.click(); a.remove()
-      setTimeout(() => URL.revokeObjectURL(url), 5000)
+      const r = await api.jobFile(id)
+      saveBlob(r.blob, r.filename)
       toast(`Готово: ${r.filename}`)
       if (r.warnings.length) toast(`Предупреждения:\n${r.warnings.join('\n')}`, 'warn')
-    } catch (e) { fail(`Ошибка генерации: ${(e as Error).message}`) } finally { setBusy(false) }
+    } catch (e) { fail(`Не удалось скачать отчёт: ${(e as Error).message}`) }
   }
+  const refreshJobs = useCallback(async () => {
+    try {
+      const list = await api.jobs()
+      setJobs(list)
+      for (const j of list) {                       // react to jobs this tab started
+        if (!mine.current.has(j.id) || handled.current.has(j.id)) continue
+        if (j.state === 'DONE') { handled.current.add(j.id); void downloadJob(j.id) }
+        else if (j.state === 'FAILED') { handled.current.add(j.id); fail(`Ошибка генерации: ${j.error ?? 'неизвестная ошибка'}`) }
+        else if (j.state === 'CANCELLED') { handled.current.add(j.id); toast(`Задача отменена: ${j.name}`) }
+      }
+    } catch { /* backend restarting */ }
+  }, [])  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { void refreshJobs() }, [refreshJobs])
+  const runningCount = jobs.filter(j => j.state === 'RUNNING').length
+  useEffect(() => {
+    if (!runningCount && !jobsOpen) return
+    const t = setInterval(refreshJobs, 700); return () => clearInterval(t)
+  }, [runningCount, jobsOpen, refreshJobs])
+  useEffect(() => {
+    if (!jobsOpen) return
+    const h = (e: MouseEvent) => { if (!(e.target as HTMLElement).closest('.jobs-wrap')) setJobsOpen(false) }
+    window.addEventListener('mousedown', h); return () => window.removeEventListener('mousedown', h)
+  }, [jobsOpen])
+
+  async function run() {
+    try {
+      const j = await api.startJob(tpl)
+      mine.current.add(j.id)
+      setJobs(prev => [j, ...prev.filter(x => x.id !== j.id)])
+      toast(`Сборка запущена: ${tpl.name}`)
+      await refreshJobs()
+    } catch (e) { fail(`Ошибка генерации: ${(e as Error).message}`) }
+  }
+  const cancelJob = async (id: string) => { try { await api.cancelJob(id) } catch (e) { fail((e as Error).message) } await refreshJobs() }
+  const clearFinished = async () => { for (const j of jobs.filter(x => x.state !== 'RUNNING')) { try { await api.cancelJob(j.id) } catch { /* already gone */ } } await refreshJobs() }
 
   // ---------- keyboard ----------
   useEffect(() => {
@@ -195,12 +249,17 @@ export default function App() {
         <button data-testid="new" onClick={() => { if (!state.dirty || confirm('Несохранённые изменения будут потеряны. Создать новый отчёт?')) { dispatch({ t: 'load', tpl: emptyTpl() }); setSel({ page: 0, ids: [] }) } }}><Icon name="filePlus" /> Новый</button>
         <button data-testid="open" onClick={openList}><Icon name="folder" /> Открыть</button>
         <button data-testid="save" onClick={save}><Icon name="save" /> Сохранить</button>
-        <button className="primary" data-testid="generate" disabled={busy} onClick={run}><Icon name={busy ? 'loader' : 'download'} className={busy ? 'spin' : ''} /> {busy ? 'Генерация…' : 'Сформировать Word'}</button>
+        <div className="jobs-wrap">
+          <button className="jobs-btn" data-testid="jobs-btn" title="Задачи сборки отчётов" onClick={() => setJobsOpen(o => !o)}>
+            <Icon name={runningCount ? 'loader' : 'ul'} className={runningCount ? 'spin' : ''} /> Задачи{runningCount > 0 && <span className="count" data-testid="jobs-count">{runningCount}</span>}</button>
+          {jobsOpen && <JobsPanel jobs={jobs} onCancel={cancelJob} onDownload={id => void downloadJob(id)} onClearFinished={clearFinished} onClose={() => setJobsOpen(false)} />}
+        </div>
+        <button className="primary" data-testid="generate" onClick={run}><Icon name="download" /> Сформировать Word</button>
       </div>
       <TextToolbar editor={editor} variables={varNames} />
       <div className="main">
-        <Sidebar settings={settings} blocks={blocks} refreshKey={refreshKey} onSettings={() => setDialog('settings')} onAddText={() => addText()}
-          onAddImage={f => addImage(f)} onAddPanel={(c, w, h) => addPanel(c, w, h)} onUseBlock={useBlock} onError={fail}
+        <Sidebar settings={settings} blocks={blocks} blockWidth={Math.round(tpl.pageWidth - 72)} refreshKey={refreshKey} onSettings={() => setDialog('settings')} onAddText={() => addText()}
+          onAddImage={f => addImage(f)} onAddPanel={(c, w, h, v) => addPanel(c, w, h, curPage, undefined, undefined, v)} onUseBlock={useBlock} onError={fail}
           onDeleteBlock={async id => { try { await api.deleteBlock(id); setBlocks(await api.blocks()) } catch (e) { fail((e as Error).message) } }} />
         <div className="canvas-wrap">
           <div className="canvas" data-testid="canvas">

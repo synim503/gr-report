@@ -1,5 +1,6 @@
 package com.example.reporter.web;
 
+import com.example.reporter.docx.JobService;
 import com.example.reporter.docx.ReportService;
 import com.example.reporter.grafana.GrafanaClient;
 import com.example.reporter.grafana.BlockFactory;
@@ -26,19 +27,20 @@ public class Controllers {
     private final TemplateStore templates;
     private final ReportService reports;
     private final BlockStore blocks;
+    private final JobService jobs;
 
-    public Controllers(SettingsStore settings, GrafanaClient grafana, TemplateStore templates, ReportService reports, BlockStore blocks) {
-        this.settings = settings; this.grafana = grafana; this.templates = templates; this.reports = reports; this.blocks = blocks;
+    public Controllers(SettingsStore settings, GrafanaClient grafana, TemplateStore templates, ReportService reports, BlockStore blocks, JobService jobs) {
+        this.settings = settings; this.grafana = grafana; this.templates = templates; this.reports = reports; this.blocks = blocks; this.jobs = jobs;
     }
 
     // ---- settings ----
-    public record SettingsView(String grafanaUrl, boolean tokenSet, String tokenHint, int orgId, double imageScale) {}
-    public record SettingsUpdate(String grafanaUrl, String token, Integer orgId, Double imageScale) {}
+    public record SettingsView(String grafanaUrl, boolean tokenSet, String tokenHint, int orgId, double imageScale, int parallelism) {}
+    public record SettingsUpdate(String grafanaUrl, String token, Integer orgId, Double imageScale, Integer parallelism) {}
 
     private SettingsView view(Settings s) {
         String t = s.token == null ? "" : s.token;
         return new SettingsView(s.grafanaUrl, !t.isBlank(), t.length() > 4 ? "••••" + t.substring(t.length() - 4) : (t.isBlank() ? "" : "••••"),
-                s.orgId, s.imageScale);
+                s.orgId, s.imageScale, s.parallelism);
     }
 
     @GetMapping("/settings") public SettingsView getSettings() { return view(settings.get()); }
@@ -50,7 +52,8 @@ public class Controllers {
             if (!url.matches("^https?://[^\\s/]+(/\\S*)?$")) throw new IllegalArgumentException("Grafana URL must start with http:// or https://");
         }
         if (u.imageScale() != null && (u.imageScale() < 1 || u.imageScale() > 4)) throw new IllegalArgumentException("imageScale must be 1..4");
-        return view(settings.update(u.grafanaUrl(), u.token(), u.orgId(), u.imageScale()));
+        if (u.parallelism() != null && (u.parallelism() < 1 || u.parallelism() > 16)) throw new IllegalArgumentException("parallelism must be 1..16");
+        return view(settings.update(u.grafanaUrl(), u.token(), u.orgId(), u.imageScale(), u.parallelism()));
     }
 
     /** Tests either the supplied (unsaved) url/token or the saved ones. */
@@ -161,6 +164,35 @@ public class Controllers {
         return respond(t, strict, overrides(all));
     }
 
+    // ---- asynchronous jobs ----
+    @PostMapping("/reports/jobs")
+    public ResponseEntity<JobService.JobView> startJob(@Valid @RequestBody Template t, @RequestParam(defaultValue = "false") boolean strict,
+                                                       @RequestParam Map<String, String> all) {
+        return ResponseEntity.accepted().body(jobs.submit(t, strict, overrides(all)));
+    }
+
+    @GetMapping("/reports/jobs") public List<JobService.JobView> listJobs() { return jobs.list(); }
+
+    @GetMapping("/reports/jobs/{id}")
+    public ResponseEntity<JobService.JobView> job(@PathVariable String id) {
+        return jobs.get(id).map(ResponseEntity::ok).orElse(ResponseEntity.notFound().build());
+    }
+
+    @GetMapping("/reports/jobs/{id}/file")
+    public ResponseEntity<byte[]> jobFile(@PathVariable String id) {
+        var view = jobs.get(id);
+        if (view.isEmpty()) return ResponseEntity.notFound().build();
+        var file = jobs.file(id);
+        if (file.isEmpty()) return ResponseEntity.status(HttpStatus.CONFLICT).build();
+        return docx(view.get().name(), file.get(), view.get().warnings());
+    }
+
+    /** Cancels a running job, or removes a finished one from the list. */
+    @DeleteMapping("/reports/jobs/{id}")
+    public ResponseEntity<Void> cancelJob(@PathVariable String id) {
+        return jobs.cancelOrRemove(id) ? ResponseEntity.noContent().build() : ResponseEntity.notFound().build();
+    }
+
     /** Query parameters var-NAME=value override report variables at generation time. */
     private static Map<String, String> overrides(Map<String, String> all) {
         Map<String, String> o = new LinkedHashMap<>();
@@ -170,14 +202,18 @@ public class Controllers {
 
     private ResponseEntity<byte[]> respond(Template t, boolean strict, Map<String, String> overrides) throws IOException {
         ReportService.Result r = reports.generate(t, strict, overrides);
-        String fname = t.name.replaceAll("[^\\p{L}\\p{N}._ -]", "_").trim();
+        return docx(t.name, r.docx(), r.warnings());
+    }
+
+    private ResponseEntity<byte[]> docx(String name, byte[] bytes, List<String> warnings) {
+        String fname = name.replaceAll("[^\\p{L}\\p{N}._ -]", "_").trim();
         if (fname.isEmpty()) fname = "report";
         HttpHeaders h = new HttpHeaders();
         h.setContentType(DOCX);
         h.set(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"report.docx\"; filename*=UTF-8''" +
                 URLEncoder.encode(fname + ".docx", StandardCharsets.UTF_8).replace("+", "%20"));
-        h.set("X-Report-Warnings", URLEncoder.encode(String.join("\n", r.warnings()), StandardCharsets.UTF_8));
+        h.set("X-Report-Warnings", URLEncoder.encode(String.join("\n", warnings), StandardCharsets.UTF_8));
         h.set(HttpHeaders.ACCESS_CONTROL_EXPOSE_HEADERS, "X-Report-Warnings, Content-Disposition");
-        return new ResponseEntity<>(r.docx(), h, HttpStatus.OK);
+        return new ResponseEntity<>(bytes, h, HttpStatus.OK);
     }
 }

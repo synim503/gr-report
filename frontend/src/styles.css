@@ -202,3 +202,40 @@ input[type=color] { padding: 2px; width: 28px; height: 26px; cursor: pointer; }
 .toast .icon { margin-top: 2px; }
 .toast div.err .icon { color: var(--bad); } .toast div.warn .icon { color: var(--warn); } .toast div:not(.err):not(.warn) .icon { color: var(--ok); }
 .canvas > * { flex: none; }
+
+/* ───────── variable fields & canvas badges ───────── */
+.varrow label { width: 64px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.varfield { position: relative; display: flex; }
+.varfield input { flex: 1; padding-right: 30px; }
+.varfield > button { position: absolute; right: 3px; top: 3px; height: 24px; width: 26px; padding: 0; border: 0; box-shadow: none; color: var(--muted); }
+.varfield .menu { position: absolute; z-index: 60; top: calc(100% + 4px); left: 0; right: 0; max-height: 220px; overflow: auto; background: var(--surface); border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm); box-shadow: var(--shadow-md); padding: 4px; display: flex; flex-direction: column; gap: 1px; }
+.varfield .menu button { position: static; width: 100%; height: auto; justify-content: flex-start; padding: 5px 8px; border: 0; box-shadow: none; color: var(--text); text-align: left; }
+.vars-card { margin: 6px 0 8px; padding: 8px 10px 6px; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius); }
+.vars-card .cap { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); display: flex; align-items: center; gap: 6px; }
+.vars-card .row label { width: 52px; }
+.var-badge { position: absolute; left: 4px; top: 4px; z-index: 5; display: flex; flex-wrap: wrap; gap: 3px; pointer-events: none; max-width: calc(100% - 8px); }
+.var-badge span { font: 600 8px/1 var(--font); padding: 3px 5px; border-radius: 999px; background: rgba(23,26,43,.78); color: #fff; white-space: nowrap; backdrop-filter: blur(2px); }
+.var-badge span b { color: #a5b4fc; font-weight: 600; }
+
+/* ───────── jobs ───────── */
+.jobs-btn { position: relative; }
+.jobs-btn .count { min-width: 17px; height: 17px; padding: 0 5px; border-radius: 999px; background: var(--accent); color: #fff; font-size: 11px; font-weight: 700; display: inline-grid; place-items: center; }
+.jobs-wrap { position: relative; }
+.jobs-pop { position: absolute; right: 0; top: calc(100% + 8px); width: 420px; max-height: 70vh; overflow: auto; z-index: 500; background: var(--surface); border: 1px solid var(--line);
+  border-radius: 14px; box-shadow: var(--shadow-lg); padding: 12px; animation: pop .15s ease-out; }
+.jobs-head { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+.jobs-list { display: flex; flex-direction: column; gap: 8px; }
+.job { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px; background: var(--surface-2); }
+.job-top { display: flex; align-items: center; gap: 8px; }
+.job-name { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job-state { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-600); }
+.job-state.done { background: var(--ok-soft); color: var(--ok); } .job-state.failed { background: var(--bad-soft); color: var(--bad); } .job-state.cancelled { background: var(--surface-3); color: var(--muted); }
+.bar { height: 6px; border-radius: 999px; background: var(--surface-3); overflow: hidden; margin: 8px 0 6px; }
+.bar i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--accent), #8b5cf6); transition: width .3s ease; }
+.job.done .bar i { background: var(--ok); } .job.failed .bar i { background: var(--bad); } .job.cancelled .bar i { background: var(--faint); }
+.job.running .bar i { background-size: 200% 100%; animation: shimmer 1.4s linear infinite; }
+@keyframes shimmer { from { background-position: 0 0 } to { background-position: -200% 0 } }
+.job-meta { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; flex-wrap: wrap; }
+.job-meta .warn { color: var(--warn); }
+.job-error { margin-top: 6px; font-size: 12px; color: var(--bad); white-space: pre-wrap; }

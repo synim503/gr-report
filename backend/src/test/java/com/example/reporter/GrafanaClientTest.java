@@ -65,6 +65,8 @@ class GrafanaClientTest {
         assertEquals("host", d.variables().get(0).name()); assertEquals("Host", d.variables().get(0).label());
         assertEquals("srv-default", d.variables().get(0).defaultValue());
         assertEquals("All", d.variables().get(1).defaultValue(), "$__all is shown as All");
+        assertEquals(java.util.List.of("srv-default", "web-01", "db-02"), d.variables().get(0).options());
+        assertEquals(java.util.List.of("All", "node", "app"), d.variables().get(1).options(), "$__all is shown as All");
         assertEquals(12, d.panels().get(1).gridX()); assertEquals(8, d.panels().get(2).gridY());
     }
 

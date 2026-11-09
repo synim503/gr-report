@@ -21,7 +21,16 @@ public class ReportService {
 
     private final GrafanaClient grafana;
     private final SettingsStore settings;
-    private final ExecutorService pool = Executors.newFixedThreadPool(4, r -> {
+    /** Cancellation flag + progress sink of one report build (jobs implement it; the synchronous API uses NONE). */
+    public interface Progress {
+        boolean cancelled();
+        void total(int charts);
+        void step();
+        Progress NONE = new Progress() { public boolean cancelled() { return false; } public void total(int c) { } public void step() { } };
+    }
+
+    // unbounded pool; the real limit is the per-report semaphore (settings.parallelism)
+    private final ExecutorService pool = Executors.newCachedThreadPool(r -> {
         Thread t = new Thread(r, "chart-render"); t.setDaemon(true); return t;
     });
 
@@ -34,7 +43,9 @@ public class ReportService {
     public Result generate(Template t, boolean strict) throws IOException { return generate(t, strict, Map.of()); }
 
     /** @param overrides report variable values supplied at generation time; they win over template.variables. */
-    public Result generate(Template t, boolean strict, Map<String, String> overrides) throws IOException {
+    public Result generate(Template t, boolean strict, Map<String, String> overrides) throws IOException { return generate(t, strict, overrides, Progress.NONE); }
+
+    public Result generate(Template t, boolean strict, Map<String, String> overrides, Progress progress) throws IOException {
         Map<String, String> reportVars = new LinkedHashMap<>(t.variables == null ? Map.of() : t.variables);
         reportVars.putAll(overrides);
         Settings s = settings.get();
@@ -46,20 +57,38 @@ public class ReportService {
         for (Template.Page p : t.pages) all.addAll(p.elements);
 
         Map<Element, Future<DocxBuilder.Image>> futures = new IdentityHashMap<>();
+        Semaphore permits = new Semaphore(Math.max(1, Math.min(16, s.parallelism)));
+        progress.total((int) all.stream().filter(e -> e.type == Template.Type.chart && e.chart != null).count());
         for (Element e : all) {
             if (e.type == Template.Type.image) {
                 images.put(e, decodeDataUrl(e, warnings));
             } else if (e.type == Template.Type.chart && e.chart != null) {
-                futures.put(e, pool.submit(() -> renderChart(t, e, s, slugs, strict, warnings, reportVars)));
+                futures.put(e, pool.submit(() -> {
+                    permits.acquire();                       // at most `parallelism` charts are in flight per report
+                    try {
+                        if (progress.cancelled()) throw new CancellationException();
+                        return renderChart(t, e, s, slugs, strict, warnings, reportVars);
+                    } finally { permits.release(); progress.step(); }
+                }));
             }
         }
-        for (var en : futures.entrySet()) {
-            try { images.put(en.getKey(), en.getValue().get()); }
-            catch (ExecutionException ex) {
-                if (ex.getCause() instanceof RuntimeException re) throw re;
-                throw new IOException(ex.getCause());
-            } catch (InterruptedException ex) { Thread.currentThread().interrupt(); throw new IOException(ex); }
+        try {
+            for (var en : futures.entrySet()) {
+                try { images.put(en.getKey(), en.getValue().get()); }
+                catch (ExecutionException ex) {
+                    if (ex.getCause() instanceof RuntimeException re) throw re;
+                    throw new IOException(ex.getCause());
+                }
+            }
+        } catch (InterruptedException ex) {                  // the job was cancelled while waiting
+            cancelAll(futures);
+            Thread.currentThread().interrupt();
+            throw new CancellationException("cancelled");
+        } catch (RuntimeException | IOException ex) {        // strict failure / cancellation: stop the remaining renders
+            cancelAll(futures);
+            throw ex;
         }
+        if (progress.cancelled()) throw new CancellationException("cancelled");
         images.values().removeIf(Objects::isNull);
 
         Map<String, String> vars = new HashMap<>(reportVars);
@@ -71,6 +100,8 @@ public class ReportService {
         vars.put("name", t.name);
         return new Result(new DocxBuilder(t, images, vars).build(), warnings);
     }
+
+    private static void cancelAll(Map<Element, Future<DocxBuilder.Image>> futures) { futures.values().forEach(f -> f.cancel(true)); }
 
     private DocxBuilder.Image renderChart(Template t, Element e, Settings s, Map<String, String> slugs, boolean strict, List<String> warnings, Map<String, String> reportVars) {
         Template.Chart c = e.chart;
@@ -86,6 +117,7 @@ public class ReportService {
             byte[] png = grafana.renderPanel(conn, c.dashboardUid, slug, c.panelId, w, h, from, to, c.theme, null, vars);
             return new DocxBuilder.Image(png, Document.PICTURE_TYPE_PNG);
         } catch (GrafanaException ex) {
+            if (Thread.currentThread().isInterrupted()) throw new CancellationException("cancelled");
             if (strict) throw ex;
             warnings.add("Chart '" + (c.title == null ? c.dashboardUid + "/" + c.panelId : c.title) + "': " + ex.getMessage());
             return new DocxBuilder.Image(PlaceholderImage.png(w, h, c.title, ex.getMessage()), Document.PICTURE_TYPE_PNG);

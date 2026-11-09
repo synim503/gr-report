@@ -13,7 +13,7 @@ import { Icon } from './Icon'
 export const DND_MIME = 'application/x-reporter'
 export type DropPayload =
   | { kind: 'text' }
-  | { kind: 'panel'; chart: { dashboardUid: string; panelId: number; title?: string }; w: number; h: number }
+  | { kind: 'panel'; chart: { dashboardUid: string; panelId: number; title?: string }; w: number; h: number; vars?: Record<string, string> }
   | { kind: 'block'; blockId: string }
 
 export interface Selection { page: number; ids: string[] }
@@ -197,10 +197,23 @@ function ElementView(p: {
         ? <TextEditor html={el.html ?? ''} lineHeight={el.lineHeight ?? 1} onHtml={p.onHtml} onEditor={p.onEditor} />
         : <div className="text-static" data-testid="text-static" style={{ lineHeight: el.lineHeight ?? 1 }}
             dangerouslySetInnerHTML={{ __html: sanitizeHtml(substitutePreview(el.html ?? '', p.tpl)) }} />)}
+      {el.type === 'chart' && el.chart && <VarBadge vars={el.chart.vars} report={p.tpl.variables} />}
       {el.type === 'chart' && el.chart && <ChartPreview title={el.chart.title}
         url={panelImageUrl({ ...el.chart, from: el.chart.from || p.tpl.timeRange.from, to: el.chart.to || p.tpl.timeRange.to },
           Math.max(100, Math.round(el.w * 96 / 72 / 50) * 50), Math.max(60, Math.round(el.h * 96 / 72 / 50) * 50), p.tpl.variables)} />}
       {el.type === 'image' && (el.dataUrl ? <img src={el.dataUrl} alt="" /> : <div className="ph">Изображение</div>)}
+    </div>
+  )
+}
+
+/** Editor-only chips showing which dashboard variables the chart is rendered with (not part of the document). */
+function VarBadge({ vars, report }: { vars?: Record<string, string>; report: Record<string, string> }) {
+  const e = Object.entries(vars ?? {}).filter(([, v]) => v !== '')
+  if (!e.length) return null
+  return (
+    <div className="var-badge" data-testid="var-badge">
+      {e.slice(0, 4).map(([k, v]) => <span key={k}><b>{k}</b> {resolveRefs(v, report)}</span>)}
+      {e.length > 4 && <span>+{e.length - 4}</span>}
     </div>
   )
 }
